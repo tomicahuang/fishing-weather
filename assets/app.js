@@ -45,10 +45,15 @@
   const nn = a => a.filter(v => v != null && !Number.isNaN(v));
 
   function loadSettings() {
-    const def = { mode: 'simple', block: { bx: 3, jh: 1 } };
-    try { const s = JSON.parse(localStorage.getItem('fw-settings') || '{}'); return { mode: s.mode || def.mode, block: { ...def.block, ...(s.block || {}) } }; }
-    catch (e) { return def; }
+    const all = SPOTS.map(s => s.key);
+    const def = { mode: 'simple', spots: all };
+    try {
+      const s = JSON.parse(localStorage.getItem('fw-settings') || '{}');
+      const spots = Array.isArray(s.spots) ? all.filter(k => s.spots.includes(k)) : all;
+      return { mode: s.mode || def.mode, spots: spots.length ? spots : all };
+    } catch (e) { return def; }
   }
+  const shown = () => state.model.filter(m => state.settings.spots.includes(m.spot.key));
   function saveSettings() { try { localStorage.setItem('fw-settings', JSON.stringify(state.settings)); } catch (e) { } }
   function loadCache() { try { return JSON.parse(localStorage.getItem('fw-wx') || 'null'); } catch (e) { return null; } }
   function saveCache() { try { localStorage.setItem('fw-wx', JSON.stringify(state.wx)); } catch (e) { } }
@@ -236,7 +241,8 @@
     return { score, c, thunder };
   }
 
-  const RANGE_BONUS = { big: 3, mid: 6, small: -6 };
+  // small tide = gentle current, easiest for black sea bream; big tide runs too fast
+  const RANGE_BONUS = { small: 6, mid: 0, big: -6 };
 
   function tideText(hours) {
     const r = hours.filter(x => x.tide).map(x => x.tide.rising);
@@ -253,7 +259,8 @@
     return { txt, short };
   }
 
-  const blockHours = spot => spot.boat ? Math.max(0, +state.settings.block[spot.key] || 0) : 0;
+  const BLOCK_HOURS = { bx: 3, jh: 1 };   // hours either side of low tide the boat can't launch
+  const blockHours = spot => spot.boat ? BLOCK_HOURS[spot.key] || 0 : 0;
   function lowBlocked(events, a, b, hrs) {
     return hrs > 0 && events.some(e => e.type === 'L' && e.t - hrs * H < b && e.t + hrs * H > a);
   }
@@ -397,14 +404,20 @@
 
   function rebuild() {
     state.model = SPOTS.map((s, i) => buildSpot(s, i));
+    pickBest();
+  }
+
+  function pickBest() {
+    const vis = shown();
     let best = null;
-    for (const m of state.model) for (const d of m.days) {
+    for (const m of vis) for (const d of m.days) {
       if (d.score == null) continue;
       if (!best || d.score > best.day.score) best = { spot: m.spot, day: d };
     }
     state.best = best;
-    if (!state.sel.user || !state.model[0].days.some(d => d.date === state.sel.date)) {
-      state.sel = best ? { spot: best.spot.key, date: best.day.date } : { spot: 'bx', date: state.model[0].days[0].date };
+    const selOk = vis.some(m => m.spot.key === state.sel.spot) && vis[0].days.some(d => d.date === state.sel.date);
+    if (!state.sel.user || !selOk) {
+      state.sel = best ? { spot: best.spot.key, date: best.day.date } : { spot: vis[0].spot.key, date: vis[0].days[0].date };
     }
   }
 
@@ -428,9 +441,9 @@
     if (d.thunder) a.push('可能有雷雨，海上無處躲雷，不建議出船。');
     else if (d.rainSum >= 10) a.push(`預估雨量 ${fmt1(d.rainSum)} mm 偏大，河口水變淡變濁太多，黑鯛可能暫離。`);
     else if (d.isRain) a.push('預估會下雨；小雨讓水色混濁、黑鯛警戒心降低，反而好釣，記得帶雨具。');
-    if (d.info.range === 'big') a.push('大潮水流較急，選轉流前後下竿，鉛錘可加重。');
-    else if (d.info.range === 'mid') a.push('中潮水流適中，是釣黑鯛的好潮。');
-    else if (d.info.range === 'small') a.push('小潮水流慢，黑鯛咬口較保守，可多換點、用活餌。');
+    if (d.info.range === 'big') a.push('大潮水流很快、難釣，盡量挑滿潮或乾潮轉流前後下竿，鉛錘要加重。');
+    else if (d.info.range === 'mid') a.push('中潮水流偏快，挑轉流前後下竿比較好控線。');
+    else if (d.info.range === 'small') a.push('小潮水流緩、好控線，是釣黑鯛的好潮。');
     if (d.sst != null && d.sst < 17) a.push(`海水溫約 ${fmt1(d.sst)}°C 偏低，黑鯛活性差，選中午前後水溫較高的時段。`);
     if (d.sst != null && d.sst > 28) a.push(`海水溫約 ${fmt1(d.sst)}°C 偏高，黑鯛多在清晨、傍晚或陰天覓食。`);
     if (d.dp != null && d.dp <= -4) a.push('氣壓下降中（鋒面接近前），魚通常比較活躍。');
@@ -452,7 +465,7 @@
     const rows = [
       ['基本分', BASE, ''],
       ['潮流（黑鯛愛流動的水）', d.comp.tide, d.win.tideText],
-      ['潮差', d.comp.range, RANGE_TXT[d.info.range] || ''],
+      ['潮差（小潮好釣、大潮水急）', d.comp.range, RANGE_TXT[d.info.range] || ''],
       ['風力', d.comp.wind, ws != null ? `${dirName(w[1] ? w[1].wd : wd)} ${beaufort(ws)} 級（${fmt1(ws)} m/s）` : '無資料'],
       ['陣風', d.comp.gust, wg ? `最大 ${fmt1(wg)} m/s` : ''],
       ['浪高' + (spot.harbor ? '（港內影響小）' : ''), d.comp.wave, wave >= 0 ? `最大 ${fmt1(wave)} m` : '無預報'],
@@ -517,7 +530,7 @@
       const d = b.day, rt = rating(d.score);
       const [ic, wt] = wxIcon(d.daily.code);
       const tips = advice(b.spot, d).filter(t => !t.startsWith('建議'));
-      const others = state.model.filter(m => m.spot.key !== b.spot.key).map(m => {
+      const others = shown().filter(m => m.spot.key !== b.spot.key).map(m => {
         const bd = m.days.filter(x => x.score != null).sort((x, y) => y.score - x.score)[0];
         return bd ? `<span>${m.spot.name} 最佳：${dlabel(bd.date)} ${bd.score} 分</span>` : '';
       }).join('');
@@ -532,7 +545,7 @@
         <div class="others">${others}</div>`;
       card.onclick = () => openDetail(b.spot.key, d.date);
     }
-    $('curveLegend').innerHTML = SPOTS.map(s => `<span><i class="dot" style="background:${s.color}"></i>${s.name}</span>`).join('');
+    $('curveLegend').innerHTML = shown().map(({ spot: s }) => `<span><i class="dot" style="background:${s.color}"></i>${s.name}</span>`).join('');
     $('curve').innerHTML = curveSvg();
     $('curve').querySelectorAll('[data-spot]').forEach(el => el.addEventListener('click', () => openDetail(el.dataset.spot, el.dataset.date)));
   }
@@ -542,7 +555,7 @@
     const W = nar ? 400 : 1000, HH = nar ? 300 : 340, l = nar ? 28 : 40, r = nar ? 6 : 14, t = 40, b = 46;
     const pw = W - l - r, ph = HH - t - b, n = DAYS;
     const X = i => l + (i + 0.5) * pw / n, Y = s => t + (100 - s) / 100 * ph;
-    const days0 = state.model[0].days;
+    const vis = shown(), days0 = vis[0].days;
     let s = `<svg viewBox="0 0 ${W} ${HH}" xmlns="http://www.w3.org/2000/svg" font-size="${nar ? 11 : 13}" font-family="inherit">`;
     [[75, 100, '#dcefe0'], [60, 75, '#f3efcc'], [45, 60, '#f8e4d6'], [0, 45, '#f6e0e0']].forEach(([a, z, c]) => {
       s += `<rect x="${l}" y="${Y(z)}" width="${pw}" height="${Y(a) - Y(z)}" fill="${c}" opacity=".75"/>`;
@@ -559,12 +572,12 @@
       const dl = nar && i > 0 && dt.getUTCDate() !== 1 ? String(dt.getUTCDate()) : (dt.getUTCMonth() + 1) + '/' + dt.getUTCDate();
       s += `<text x="${X(i)}" y="${HH - 26}" text-anchor="middle" fill="#334155" font-weight="${we ? 700 : 400}">${dl}</text>`;
       s += `<text x="${X(i)}" y="${HH - 10}" text-anchor="middle" fill="${we ? '#c2410c' : '#64748b'}">${WK[dt.getUTCDay()]}${d.di === 0 && !nar ? '・今' : ''}</text>`;
-      const rainy = state.model.some(m => m.days[i].isRain), th = state.model.some(m => m.days[i].thunder);
+      const rainy = vis.some(m => m.days[i].isRain), th = vis.some(m => m.days[i].thunder);
       if (rainy) s += `<text x="${X(i)}" y="${t - 20}" text-anchor="middle" font-size="${nar ? 12 : 15}">${th ? '⛈️' : '🌧️'}</text>`;
       const rg = d.info.range;
       if (rg) s += `<text x="${X(i)}" y="${t - 6}" text-anchor="middle" font-size="${nar ? 10 : 11}" fill="#94a3b8">${nar ? RANGE_TXT[rg].slice(0, 1) : RANGE_TXT[rg]}</text>`;
     });
-    state.model.forEach(m => {
+    vis.forEach(m => {
       let path = '', pen = false;
       m.days.forEach((d, i) => {
         if (d.score == null) { pen = false; return; }
@@ -573,7 +586,7 @@
       });
       s += `<path d="${path}" fill="none" stroke="${m.spot.color}" stroke-width="2.2" stroke-linejoin="round"/>`;
     });
-    state.model.forEach(m => {
+    vis.forEach(m => {
       m.days.forEach((d, i) => {
         if (d.score == null) return;
         const isBest = state.best && state.best.spot.key === m.spot.key && state.best.day.date === d.date;
@@ -591,7 +604,7 @@
   function renderFull() {
     renderNow();
     renderHeatmap();
-    $('spotTabs').innerHTML = SPOTS.map(s => `<button type="button" data-spot="${s.key}" class="${s.key === state.sel.spot ? 'on' : ''}">${s.name}</button>`).join('');
+    $('spotTabs').innerHTML = shown().map(({ spot: s }) => `<button type="button" data-spot="${s.key}" class="${s.key === state.sel.spot ? 'on' : ''}">${s.name}</button>`).join('');
     $('spotTabs').querySelectorAll('button').forEach(b => b.addEventListener('click', () => { state.sel.spot = b.dataset.spot; state.sel.user = true; renderFull(); }));
     renderDayTable();
     renderDetail();
@@ -601,7 +614,7 @@
 
   function renderNow() {
     const now = nowL();
-    $('nowStrip').innerHTML = state.model.map(m => {
+    $('nowStrip').innerHTML = shown().map(m => {
       const s = tideAt(m.events, now);
       const d0 = m.days[0];
       const x = d0.hours[new Date(now).getUTCHours()];
@@ -626,8 +639,8 @@
   }
 
   function renderHeatmap() {
-    const days0 = state.model[0].days;
-    const top = days0.map((_, i) => Math.max(...state.model.map(m => m.days[i].score ?? -1)));
+    const vis = shown(), days0 = vis[0].days;
+    const top = days0.map((_, i) => Math.max(...vis.map(m => m.days[i].score ?? -1)));
     const cell = (m, d, i) => {
       const cls = 'c' + d.rating.cls.slice(1);
       const sel = state.sel.spot === m.spot.key && state.sel.date === d.date;
@@ -643,14 +656,14 @@
     let h;
     if (isNarrow()) {
       h = '<table class="heatmap tall"><thead><tr><th></th>' +
-        state.model.map(m => `<th class="spot-h"><i class="dot" style="background:${m.spot.color}"></i>${m.spot.short}</th>`).join('') + '</tr></thead><tbody>';
-      days0.forEach((d, i) => { h += `<tr><th class="day${isWeekend(d.date) ? ' we' : ''}">${dayHead(d)}</th>${state.model.map(m => cell(m, m.days[i], i)).join('')}</tr>`; });
+        vis.map(m => `<th class="spot-h"><i class="dot" style="background:${m.spot.color}"></i>${m.spot.short}</th>`).join('') + '</tr></thead><tbody>';
+      days0.forEach((d, i) => { h += `<tr><th class="day${isWeekend(d.date) ? ' we' : ''}">${dayHead(d)}</th>${vis.map(m => cell(m, m.days[i], i)).join('')}</tr>`; });
     } else {
       h = '<table class="heatmap"><thead><tr><th></th>' + days0.map(d => `<th class="${isWeekend(d.date) ? 'we' : ''}">${dayHead(d)}</th>`).join('') + '</tr></thead><tbody>';
-      state.model.forEach(m => { h += `<tr><th class="spot"><i class="dot" style="background:${m.spot.color}"></i>${m.spot.name}</th>${m.days.map((d, i) => cell(m, d, i)).join('')}</tr>`; });
+      vis.forEach(m => { h += `<tr><th class="spot"><i class="dot" style="background:${m.spot.color}"></i>${m.spot.name}</th>${m.days.map((d, i) => cell(m, d, i)).join('')}</tr>`; });
     }
     h += '</tbody></table>';
-    h += '<div class="scale"><span class="c4">75+ 適合</span><span class="c3">60–74 尚可</span><span class="c2">45–59 勉強</span><span class="c1">&lt;45 不適合 / 危險</span><span class="c0">無資料</span><span class="note">★＝當天三處最好　虛線框＝週末　節＝白天平均風速　m＝最大浪高</span></div>';
+    h += '<div class="scale"><span class="c4">75+ 適合</span><span class="c3">60–74 尚可</span><span class="c2">45–59 勉強</span><span class="c1">&lt;45 不適合 / 危險</span><span class="c0">無資料</span><span class="note">★＝當天勾選的釣點中最好　虛線框＝週末　節＝白天平均風速　m＝最大浪高</span></div>';
     $('heatmap').innerHTML = h;
     $('heatmap').querySelectorAll('td[data-spot]').forEach(td => td.addEventListener('click', () => openDetail(td.dataset.spot, td.dataset.date)));
   }
@@ -834,8 +847,8 @@
   function renderRefs() {
     const sp = SPOT[state.sel.spot];
     $('refs').innerHTML = `
-      <div><h3>三個釣點的原始網站</h3><ul>
-        ${SPOTS.map(s => `<li><b>${s.name}</b>：<a href="https://www.windguru.cz/${s.wg}" target="_blank" rel="noopener">Windguru ${s.wgName}</a>、<a href="https://www.cwa.gov.tw/V8/C/M/Fishery/tide_30day_MOD/${s.tideId}.html" target="_blank" rel="noopener">氣象署潮汐（${s.tide}）</a></li>`).join('')}
+      <div><h3>釣點的原始網站</h3><ul>
+        ${shown().map(({ spot: s }) => `<li><b>${s.name}</b>：<a href="https://www.windguru.cz/${s.wg}" target="_blank" rel="noopener">Windguru ${s.wgName}</a>、<a href="https://www.cwa.gov.tw/V8/C/M/Fishery/tide_30day_MOD/${s.tideId}.html" target="_blank" rel="noopener">氣象署潮汐（${s.tide}）</a></li>`).join('')}
       </ul></div>
       <div><h3>出發前再看一眼</h3><ul>
         <li><a href="https://www.cwa.gov.tw/V8/C/W/OBS_Radar.html" target="_blank" rel="noopener">氣象署雷達回波</a>（看雨帶有沒有往釣點移動）</li>
@@ -848,7 +861,7 @@
         <li>喜歡有流動、略混濁的水；漲潮中段到滿潮前通常最好。</li>
         <li>警戒心高：陰天、小雨、晨昏比大太陽好。</li>
         <li>蚵棚、堤邊、河口常見；常用餌：蝦、沙蠶、蚵肉、小螃蟹。</li>
-        <li>大潮流急要加重鉛；小潮流慢可多換點。</li>
+        <li>小潮水流緩最好釣；中潮、大潮水流快，挑轉流前後下竿、鉛要加重。</li>
       </ul></div>`;
   }
 
@@ -856,14 +869,15 @@
     const el = $('settings');
     if (el.dataset.ready) return;
     el.dataset.ready = '1';
-    const boatSpots = SPOTS.filter(s => s.boat);
-    el.innerHTML = boatSpots.map(s =>
-      `<label>${s.name}：乾潮前後 <input type="number" min="0" max="6" step="0.5" data-block="${s.key}" value="${blockHours(s)}"> 小時水太淺，不能開船</label>`
-    ).join('') + `
-      <p class="hint">布袋南港內水位高低影響小，不限制開船時間。</p>
+    el.innerHTML = `
+      <div class="explain"><b>開船限制（固定）</b><ul>
+        ${SPOTS.filter(s => s.boat).map(s => `<li>${s.name}：乾潮前後 ${blockHours(s)} 小時水太淺，不能開船。</li>`).join('')}
+        <li>布袋南港內：水位高低影響小，不限制開船時間。</li>
+      </ul></div>
       <div class="explain"><b>評分方式（以黑鯛為準）</b><ul>
-        <li>每天在 04:00–21:00、<b>可以開船</b>的時段中（八仙避開乾潮前後 ${blockHours(SPOT.bx)} 小時、金湖避開乾潮前後 ${blockHours(SPOT.jh)} 小時），找平均分數最高的連續 3 小時當「建議時段」，再加上潮差分。</li>
-        <li>基本分 ${BASE}。潮流：漲潮中段 +10、滿潮前 +5、剛退潮 +5、平潮 −3；潮差：中潮 +6、大潮 +3、小潮 −6。</li>
+        <li>每天在 04:00–21:00、<b>可以開船</b>的時段中，找平均分數最高的連續 3 小時當「建議時段」，再加上潮差分。</li>
+        <li>基本分 ${BASE}。潮流：漲潮中段 +10、滿潮前 +5、剛退潮 +5、平潮 −3。</li>
+        <li>潮差：小潮 +${RANGE_BONUS.small}（水流緩、最好釣）、中潮 ${RANGE_BONUS.mid}、大潮 ${String(RANGE_BONUS.big).replace('-', '−')}（水流很快、難釣）。</li>
         <li>風：2 級以下 +4、4 級 −10、5 級 −25、6 級 −45（且總分最多 40）；陣風 6 級以上再扣。</li>
         <li>彰濱八仙：北風 +8、南風 −18（最差風向）。</li>
         <li>浪：0.6 m 內不扣，1 m −6、1.5 m −15、2 m −28；布袋南港內在港內，浪的影響只算約三分之一。</li>
@@ -871,13 +885,6 @@
         <li>海水溫 17–27°C 不扣，偏冷、偏熱扣分；晨昏 +5、深夜 −5；鋒面前降壓 +3、冷鋒後回升 −8；起霧 −12。</li>
         <li>預估下雨的日子：日雨量 ≥ 1 mm 或降雨機率 ≥ 60%，標 🌧；有雷雨標 ⛈。</li>
       </ul></div>`;
-    el.querySelectorAll('input[data-block]').forEach(inp => inp.addEventListener('change', () => {
-      state.settings.block[inp.dataset.block] = clamp(Number(inp.value) || 0, 0, 6);
-      saveSettings();
-      el.dataset.ready = '';
-      rebuild();
-      render();
-    }));
   }
 
   function openDetail(spot, date) {
@@ -935,6 +942,23 @@
     render();
   }));
   $('refreshBtn').addEventListener('click', refresh);
+
+  function renderPick() {
+    const on = state.settings.spots;
+    $('spotPick').innerHTML = SPOTS.map(s => `<label class="pick${on.includes(s.key) ? ' on' : ''}" style="--c:${s.color}">
+      <input type="checkbox" data-pick="${s.key}"${on.includes(s.key) ? ' checked' : ''}><span class="box"></span>${s.name}</label>`).join('');
+    $('spotPick').querySelectorAll('input[data-pick]').forEach(inp => inp.addEventListener('change', () => {
+      const next = SPOTS.map(s => s.key).filter(k => k === inp.dataset.pick ? inp.checked : on.includes(k));
+      if (!next.length) { inp.checked = true; return; }   // keep at least one spot
+      state.settings.spots = next;
+      saveSettings();
+      renderPick();
+      if (state.model) pickBest();
+      render();
+    }));
+  }
+  renderPick();
+
   let wasNarrow = isNarrow();
   window.addEventListener('resize', () => {
     if (isNarrow() === wasNarrow) return;
