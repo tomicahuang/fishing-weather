@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="zh-Hant-TW">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>出釣海象評估（黑鯛）</title>
+  <link rel="icon" type="image/png" sizes="32x32" href="assets/icons/favicon-32.png">
+  <link rel="apple-touch-icon" href="assets/icons/apple-touch-icon.png">
+  <meta name="apple-mobile-web-app-title" content="出釣海象">
+  <meta name="theme-color" content="#0b4a6e">
+  <link rel="manifest" href="manifest.json">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+  <header class="top">
+    <div class="brand">
+      <img class="logo" src="assets/icons/icon-192.png" alt="" aria-hidden="true">
+      <div>
+        <h1>出釣海象評估</h1>
+        <p class="sub">彰濱八仙・雲林金湖・布袋南港內｜對象魚：黑鯛｜未來兩週</p>
+      </div>
+    </div>
+    <div class="actions">
+      <div class="mode-switch" role="tablist" aria-label="顯示模式">
+        <button type="button" data-mode="simple">簡易模式</button>
+        <button type="button" data-mode="full">完整模式</button>
+      </div>
+      <button type="button" class="btn refresh" id="refreshBtn">更新資料</button>
+    </div>
+  </header>
+  <div class="status" id="status"></div>
+
+  <main id="app">
+    <section id="simpleView" class="view">
+      <div id="bestCard" class="best-card"></div>
+      <section class="panel">
+        <div class="panel-head">
+          <h2>評分走勢（兩週適合曲線）</h2>
+          <div class="legend" id="curveLegend"></div>
+        </div>
+        <div id="curve" class="curve"></div>
+        <p class="hint">點曲線上的點可看那天的詳細資料。🌧＝預估下雨　⛈＝可能雷雨</p>
+      </section>
+    </section>
+
+    <section id="fullView" class="view">
+      <section class="panel">
+        <div class="panel-head"><h2>現在潮況</h2></div>
+        <div id="nowStrip" class="now-strip"></div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2>兩週總覽（分數越高越適合釣黑鯛）</h2>
+        </div>
+        <div id="heatmap" class="heatmap-wrap"></div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2>每日明細</h2>
+          <div class="spot-tabs" id="spotTabs"></div>
+        </div>
+        <div id="dayTable" class="table-wrap"></div>
+      </section>
+
+      <section class="panel" id="detailPanel">
+        <div id="detail"></div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head"><h2>參考資訊與原始網站</h2></div>
+        <div id="refs" class="refs"></div>
+      </section>
+
+      <details class="panel settings">
+        <summary>設定與評分方式</summary>
+        <div id="settings"></div>
+      </details>
+    </section>
+  </main>
+
+  <footer class="foot">
+    潮汐：中央氣象署 30 天潮汐預報｜天氣、浪、海水溫：Open-Meteo｜分數為參考，出船前請再確認海巡與氣象署最新公告
+  </footer>
+
+  <script src="data/tide-data.js"></script>
+  <script src="assets/app.js"></script>
+</body>
+</html>

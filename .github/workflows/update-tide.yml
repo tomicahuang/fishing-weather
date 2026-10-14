@@ -1,0 +1,34 @@
+name: update-tide
+
+on:
+  schedule:
+    # cron is UTC: 16 / 22 / 04 / 10 UTC = 00 / 06 / 12 / 18 Taipei, every day
+    - cron: '0 4,10,16,22 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: update-tide
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch CWA 30-day tide predictions
+        shell: pwsh
+        run: ./update-tide.ps1
+      - name: Save data to repo
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/tide-data.js
+          if git diff --cached --quiet; then echo "No data change"; exit 0; fi
+          git commit -q -m "Auto update tide $(TZ=Asia/Taipei date '+%Y-%m-%d %H:%M')"
+          git pull -q --rebase origin HEAD
+          git push -q origin HEAD
