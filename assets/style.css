@@ -226,8 +226,9 @@ table.hours tr.dark td.t { color: #6366f1; }
   .logo { width: 40px; height: 40px; }
   .actions { width: 100%; justify-content: space-between; }
   .status { padding: 5px 12px; font-size: 11.5px; }
-  .spot-pick { display: grid; grid-template-columns: repeat(3, 1fr); padding: 8px 10px; gap: 6px; }
-  .pick { justify-content: center; padding: 7px 4px; gap: 4px; font-size: 13.5px; }
+  .spot-pick { flex-wrap: nowrap; overflow-x: auto; padding: 8px 32px 8px 10px; gap: 6px; -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 32px), transparent); mask-image: linear-gradient(to right, #000 calc(100% - 32px), transparent); scrollbar-width: none; -webkit-overflow-scrolling: touch; scroll-snap-type: x proximity; }
+  .spot-pick::-webkit-scrollbar { display: none; }
+  .pick { flex: none; white-space: nowrap; padding: 7px 11px; gap: 5px; font-size: 13.5px; scroll-snap-align: start; }
   .pick small { font-size: 10px; padding: 0 3px; }
   main { padding: 8px; }
   .panel { padding: 12px 10px; border-radius: 12px; }
