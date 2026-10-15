@@ -10,10 +10,15 @@
   const H = 3600e3, D = 86400e3;
 
   const SPOTS = [
-    { key: 'bx', name: '彰濱八仙', short: '八仙', lat: 24.07, lon: 120.40, tide: '鹿港', tideId: 'T000702', wg: 218505, wgName: '彰濱', boat: true, harbor: false, windPref: 'north', color: '#2747d8' },
-    { key: 'jh', name: '雲林金湖', short: '金湖', lat: 23.58, lon: 120.14, tide: '口湖', tideId: 'T000919', wg: 463753, wgName: '台子港', boat: true, harbor: false, windPref: null, color: '#2e7d32' },
-    { key: 'bd', name: '布袋南港內', short: '布袋', lat: 23.37, lon: 120.15, tide: '布袋', tideId: 'T001003', wg: 462280, wgName: '布袋港', boat: false, harbor: true, windPref: null, color: '#c0503a' }
+    // wf = how much of the open-sea wave penalty applies at the spot
+    { key: 'bx', name: '彰濱八仙', short: '八仙', lat: 24.07, lon: 120.40, tide: '鹿港', tideId: 'T000702', wg: 218505, wgName: '彰濱', boat: true, shore: false, wf: 1, fish: '黑鯛', windPref: 'north', color: '#2747d8' },
+    { key: 'jh', name: '雲林金湖', short: '金湖', lat: 23.58, lon: 120.14, tide: '口湖', tideId: 'T000919', wg: 463753, wgName: '台子港', boat: true, shore: false, wf: 1, fish: '黑鯛', windPref: null, color: '#2e7d32' },
+    { key: 'bd', name: '布袋南港內', short: '布袋', lat: 23.37, lon: 120.15, tide: '布袋', tideId: 'T001003', wg: 462280, wgName: '布袋港', boat: false, shore: false, wf: 0.35, fish: '黑鯛', windPref: null, color: '#c0503a' },
+    { key: 'qg', name: '七股西寮', short: '七股', lat: 23.117, lon: 120.045, tide: '七股', tideId: 'T700015', wg: 286920, wgName: '七股、西寮', boat: false, shore: true, wf: 0.6, fish: '', windPref: null, color: '#8e44ad' },
+    { key: 'ap', name: '安平港', short: '安平', lat: 22.988, lon: 120.140, tide: '安平', tideId: 'T700036', wg: 744527, wgName: '安平港', boat: false, shore: true, wf: 0.4, fish: '', windPref: null, color: '#0e7490' }
   ];
+  const fishOf = sp => sp.fish || '魚';
+  const kindOf = sp => sp.shore ? '岸釣' : '船釣・黑鯛';
   const SPOT = Object.fromEntries(SPOTS.map(s => [s.key, s]));
 
   const state = {
@@ -46,16 +51,23 @@
 
   function loadSettings() {
     const all = SPOTS.map(s => s.key);
-    const def = { mode: 'simple', spots: all };
+    const def = { mode: 'simple', spots: all, known: all };
     try {
       const s = JSON.parse(localStorage.getItem('fw-settings') || '{}');
-      const spots = Array.isArray(s.spots) ? all.filter(k => s.spots.includes(k)) : all;
-      return { mode: s.mode || def.mode, spots: spots.length ? spots : all };
+      // spots added after the user last saved start out checked
+      const known = Array.isArray(s.known) ? s.known : ['bx', 'jh', 'bd'];
+      const spots = Array.isArray(s.spots) ? all.filter(k => s.spots.includes(k) || !known.includes(k)) : all;
+      return { mode: s.mode || def.mode, spots: spots.length ? spots : all, known: all };
     } catch (e) { return def; }
   }
   const shown = () => state.model.filter(m => state.settings.spots.includes(m.spot.key));
   function saveSettings() { try { localStorage.setItem('fw-settings', JSON.stringify(state.settings)); } catch (e) { } }
-  function loadCache() { try { return JSON.parse(localStorage.getItem('fw-wx') || 'null'); } catch (e) { return null; } }
+  function loadCache() {
+    try {
+      const c = JSON.parse(localStorage.getItem('fw-wx') || 'null');
+      return c && c.fc && c.fc.length === SPOTS.length ? c : null;
+    } catch (e) { return null; }
+  }
   function saveCache() { try { localStorage.setItem('fw-wx', JSON.stringify(state.wx)); } catch (e) { } }
 
   const BF = [0.3, 1.6, 3.4, 5.5, 8.0, 10.8, 13.9, 17.2, 20.8, 24.5, 28.5, 32.7];
@@ -141,7 +153,8 @@
     if (!/github\.io$/.test(location.hostname)) list.push(loadScript(REMOTE_TIDE + stamp));
     const got = (await Promise.all(list)).filter(Boolean);
     if (state.tide) got.push(state.tide);
-    got.sort((a, b) => (b.updated || '').localeCompare(a.updated || ''));
+    const nSpots = t => SPOTS.filter(s => t.spots && t.spots[s.key]).length;
+    got.sort((a, b) => nSpots(b) - nSpots(a) || (b.updated || '').localeCompare(a.updated || ''));
     if (got.length) state.tide = got[0];
   }
 
@@ -216,7 +229,7 @@
       const sec = windSector(x.wd);
       c.dir = sec === 'north' ? 8 : sec === 'south' ? -18 : 0;
     }
-    const wf = spot.harbor ? 0.35 : 1;
+    const wf = spot.wf;
     c.wave = x.wave == null ? 0 : Math.round(wf * (x.wave <= 0.3 ? 2 : x.wave <= 0.6 ? 0 : x.wave <= 1.0 ? -6 : x.wave <= 1.5 ? -15 : x.wave <= 2.0 ? -28 : -45));
     const thunder = x.code != null && x.code >= 95;
     c.rain = thunder ? -40 : x.pr >= 10 ? -35 : x.pr >= 4 ? -20 : x.pr >= 1 ? -10 : (x.pr >= 0.2 || x.pp >= 60) ? -3 : 0;
@@ -439,17 +452,18 @@
       if (sec === 'south') a.push('吹南風，是彰濱八仙最差的風向，黑鯛不好釣。');
     }
     if (d.thunder) a.push('可能有雷雨，海上無處躲雷，不建議出船。');
-    else if (d.rainSum >= 10) a.push(`預估雨量 ${fmt1(d.rainSum)} mm 偏大，河口水變淡變濁太多，黑鯛可能暫離。`);
-    else if (d.isRain) a.push('預估會下雨；小雨讓水色混濁、黑鯛警戒心降低，反而好釣，記得帶雨具。');
+    else if (d.rainSum >= 10) a.push(`預估雨量 ${fmt1(d.rainSum)} mm 偏大，河口水變淡變濁太多，${fishOf(spot)}可能暫離。`);
+    else if (d.isRain) a.push(`預估會下雨；小雨讓水色混濁、${fishOf(spot)}警戒心降低，反而好釣，記得帶雨具。`);
     if (d.info.range === 'big') a.push('大潮水流很快、難釣，盡量挑滿潮或乾潮轉流前後下竿，鉛錘要加重。');
     else if (d.info.range === 'mid') a.push('中潮水流偏快，挑轉流前後下竿比較好控線。');
-    else if (d.info.range === 'small') a.push('小潮水流緩、好控線，是釣黑鯛的好潮。');
-    if (d.sst != null && d.sst < 17) a.push(`海水溫約 ${fmt1(d.sst)}°C 偏低，黑鯛活性差，選中午前後水溫較高的時段。`);
-    if (d.sst != null && d.sst > 28) a.push(`海水溫約 ${fmt1(d.sst)}°C 偏高，黑鯛多在清晨、傍晚或陰天覓食。`);
+    else if (d.info.range === 'small') a.push(`小潮水流緩、好控線，是釣${fishOf(spot)}的好潮。`);
+    if (d.sst != null && d.sst < 17) a.push(`海水溫約 ${fmt1(d.sst)}°C 偏低，${fishOf(spot)}活性差，選中午前後水溫較高的時段。`);
+    if (d.sst != null && d.sst > 28) a.push(`海水溫約 ${fmt1(d.sst)}°C 偏高，${fishOf(spot)}多在清晨、傍晚或陰天覓食。`);
     if (d.dp != null && d.dp <= -4) a.push('氣壓下降中（鋒面接近前），魚通常比較活躍。');
-    if (d.dp != null && d.dp >= 5) a.push('冷鋒過後氣壓回升，黑鯛咬口通常變差。');
+    if (d.dp != null && d.dp >= 5) a.push(`冷鋒過後氣壓回升，${fishOf(spot)}咬口通常變差。`);
     if (d.visMin != null && d.visMin < 1000) a.push('可能起霧、能見度低，出入港注意安全。');
-    if (!spot.harbor && d.waveMax != null && d.waveMax > 1.5) a.push(`浪高最大約 ${fmt1(d.waveMax)} m，船上不舒適也較危險。`);
+    if (spot.boat && d.waveMax != null && d.waveMax > 1.5) a.push(`浪高最大約 ${fmt1(d.waveMax)} m，船上不舒適也較危險。`);
+    if (spot.shore && d.waveMax != null && d.waveMax > 1.5) a.push(`外海浪高約 ${fmt1(d.waveMax)} m，堤防、消波塊容易被浪打，不要站太前面。`);
     if (d.waveMax == null) a.push('這天超出浪的預報範圍，只用風來評估海況。');
     if (d.long) a.push('這是 7 天後的長期預報，變動大，出發前再確認。');
     if (d.tideSrc === 'model') a.push('這天沒有氣象署潮汐資料，潮時是模型推估。');
@@ -464,11 +478,11 @@
     const wave = Math.max(...nn(w.map(x => x.wave)), -1);
     const rows = [
       ['基本分', BASE, ''],
-      ['潮流（黑鯛愛流動的水）', d.comp.tide, d.win.tideText],
+      [`潮流（${fishOf(spot)}愛流動的水）`, d.comp.tide, d.win.tideText],
       ['潮差（小潮好釣、大潮水急）', d.comp.range, RANGE_TXT[d.info.range] || ''],
       ['風力', d.comp.wind, ws != null ? `${dirName(w[1] ? w[1].wd : wd)} ${beaufort(ws)} 級（${fmt1(ws)} m/s）` : '無資料'],
       ['陣風', d.comp.gust, wg ? `最大 ${fmt1(wg)} m/s` : ''],
-      ['浪高' + (spot.harbor ? '（港內影響小）' : ''), d.comp.wave, wave >= 0 ? `最大 ${fmt1(wave)} m` : '無預報'],
+      ['浪高' + (spot.wf < 1 ? (spot.shore ? '（岸釣影響較小）' : '（港內影響小）') : ''), d.comp.wave, wave >= 0 ? `最大 ${fmt1(wave)} m` : '無預報'],
       ['降雨', d.comp.rain, `機率最高 ${Math.max(...nn(w.map(x => x.pp)), 0)}%，${fmt1(w.reduce((s, x) => s + (x.pr || 0), 0))} mm`],
       ['海水溫', d.comp.sst, d.sst != null ? fmt1(avg('sst')) + '°C' : ''],
       ['晨昏時段', d.comp.light, ''],
@@ -536,9 +550,9 @@
       }).join('');
       card.className = 'best-card c' + rt.cls.slice(1);
       card.innerHTML = `
-        <div class="lbl">兩週內最佳出釣日（黑鯛）</div>
+        <div class="lbl">兩週內最佳出釣日</div>
         <div class="day">${dlabel(d.date)}${d.di === 0 ? ' 今天' : d.di === 1 ? ' 明天' : ''}</div>
-        <div><span class="spot">${b.spot.name}</span><span class="score">${rt.txt} ${d.score} 分</span></div>
+        <div><span class="spot">${b.spot.name}</span> <small class="kind">${kindOf(b.spot)}</small><span class="score">${rt.txt} ${d.score} 分</span></div>
         <div class="win">⏰ ${d.win.label}　${d.win.tideText}</div>
         <div class="tip">${ic} ${wt}　${RANGE_TXT[d.info.range] || ''}　風 ${dirName(d.domDir)} ${beaufort(d.windAvg) ?? '—'} 級　浪 ${fmt1(d.waveMax)} m　海溫 ${fmt1(d.sst)}°C${d.isRain ? '　<b>🌧 預估下雨</b>' : ''}</div>
         ${tips[0] ? `<div class="tip">💡 ${tips[0]}</div>` : ''}
@@ -802,7 +816,8 @@
     const sp = m.spot;
     const adv = advice(sp, d).map(t => `<p>• ${t}</p>`).join('');
     const boat = sp.boat ? `<div class="boatwin ${d.boatRanges && d.boatRanges.length ? '' : 'no'}">🚤 可開船時段：<b>${rangesTxt(d.boatRanges).replace(/<br>/g, '、')}</b>；乾潮前後 ${blockHours(sp)} 小時水太淺會擱淺${d.events.filter(e => e.type === 'L').map(e => `（乾潮 ${hm(e.t)}：${hm(e.t - blockHours(sp) * H)}–${hm(e.t + blockHours(sp) * H)} 不能開船）`).join('')}</div>`
-      : '<div class="boatwin">🚤 布袋南港內水位高低影響較小，全天都可釣，以潮流與天氣為主。</div>';
+      : sp.shore ? '<div class="boatwin">🎣 岸釣不用開船，乾潮也能釣，以潮流、風浪與天氣為主。</div>'
+      : `<div class="boatwin">🚤 ${sp.name}水位高低影響較小，全天都可釣，以潮流與天氣為主。</div>`;
     let rows = '';
     d.hours.forEach(x => {
       const inWin = d.win && x.hour >= d.win.st && x.hour < d.win.st + d.win.len;
@@ -822,7 +837,7 @@
     });
     $('detail').innerHTML = `
       <div class="detail-head">
-        <h2 style="border-left:6px solid ${sp.color};padding-left:8px">${sp.name}　${dlabel(d.date)}${d.di === 0 ? ' 今天' : ''}</h2>
+        <h2 style="border-left:6px solid ${sp.color};padding-left:8px">${sp.name} <small class="kind">${kindOf(sp)}</small>　${dlabel(d.date)}${d.di === 0 ? ' 今天' : ''}</h2>
         <div><span class="r ${d.rating.cls}" style="font-size:15px">${d.rating.txt} ${d.score ?? ''}</span>　${moonIcon(d.info.lunarDay)} 農曆 ${d.info.lunar}　<span class="range-${d.info.range}">${RANGE_TXT[d.info.range] || ''}</span>${d.isRain ? `　<span class="rain-tag${d.thunder ? ' thunder' : ''}">${d.thunder ? '⛈ 雷雨' : '🌧 預估下雨'}</span>` : ''}</div>
       </div>
       <h3>潮汐曲線（${sp.tide}${d.tideSrc === 'model' ? '，模型推估' : '，中央氣象署'}）　<small style="font-weight:400;color:#64748b"><span style="color:#15803d">綠線＝漲潮</span>　<span style="color:#c2410c">橘線＝退潮</span>　黃底＝建議時段　灰底＝夜間　單位 cm（相對平均海平面）</small></h3>
@@ -830,7 +845,7 @@
       ${boat}
       <div class="detail-grid">
         <div>
-          <h3>黑鯛出釣建議</h3>
+          <h3>${sp.fish}出釣建議</h3>
           <div class="advice">${adv}</div>
         </div>
         <div>
@@ -874,7 +889,8 @@
         ${SPOTS.filter(s => s.boat).map(s => `<li>${s.name}：乾潮前後 ${blockHours(s)} 小時水太淺，不能開船。</li>`).join('')}
         <li>布袋南港內：水位高低影響小，不限制開船時間。</li>
       </ul></div>
-      <div class="explain"><b>評分方式（以黑鯛為準）</b><ul>
+      <div class="explain"><b>評分方式（船釣以黑鯛為準，岸釣不限魚種）</b><ul>
+        <li>七股西寮、安平港為岸釣：不受乾潮限制；浪的扣分七股算 6 成、安平港在港內算 4 成。</li>
         <li>每天在 04:00–21:00、<b>可以開船</b>的時段中，找平均分數最高的連續 3 小時當「建議時段」，再加上潮差分。</li>
         <li>基本分 ${BASE}。潮流：漲潮中段 +10、滿潮前 +5、剛退潮 +5、平潮 −3。</li>
         <li>潮差：小潮 +${RANGE_BONUS.small}（水流緩、最好釣）、中潮 ${RANGE_BONUS.mid}、大潮 ${String(RANGE_BONUS.big).replace('-', '−')}（水流很快、難釣）。</li>
@@ -945,11 +961,12 @@
 
   function renderPick() {
     const on = state.settings.spots;
-    $('spotPick').innerHTML = SPOTS.map(s => `<label class="pick${on.includes(s.key) ? ' on' : ''}" style="--c:${s.color}">
-      <input type="checkbox" data-pick="${s.key}"${on.includes(s.key) ? ' checked' : ''}><span class="box"></span>${s.name}</label>`).join('');
-    $('spotPick').querySelectorAll('input[data-pick]').forEach(inp => inp.addEventListener('change', () => {
-      const next = SPOTS.map(s => s.key).filter(k => k === inp.dataset.pick ? inp.checked : on.includes(k));
-      if (!next.length) { inp.checked = true; return; }   // keep at least one spot
+    $('spotPick').innerHTML = SPOTS.map(s => `<button type="button" role="checkbox" aria-checked="${on.includes(s.key)}" class="pick${on.includes(s.key) ? ' on' : ''}" style="--c:${s.color}" data-pick="${s.key}">
+      <span class="box"></span>${s.name}${s.shore ? '<small>岸</small>' : ''}</button>`).join('');
+    $('spotPick').querySelectorAll('button[data-pick]').forEach(btn => btn.addEventListener('click', () => {
+      const k0 = btn.dataset.pick;
+      const next = SPOTS.map(s => s.key).filter(k => k === k0 ? !on.includes(k) : on.includes(k));
+      if (!next.length) return;   // keep at least one spot
       state.settings.spots = next;
       saveSettings();
       renderPick();

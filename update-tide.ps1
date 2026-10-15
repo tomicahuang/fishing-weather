@@ -1,4 +1,4 @@
-# Download the CWA 30-day tide predictions for the three fishing spots into data/tide-data.js.
+# Download the CWA 30-day tide predictions for the fishing spots into data/tide-data.js.
 # Usage: powershell -NoProfile -ExecutionPolicy Bypass -File update-tide.ps1
 # Also runs on GitHub Actions (pwsh on Linux), so keep it free of Windows-only calls.
 $ErrorActionPreference = 'Stop'
@@ -6,7 +6,7 @@ $ProgressPreference = 'SilentlyContinue'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
 $root = $PSScriptRoot
-$stations = [ordered]@{ bx = 'T000702'; jh = 'T000919'; bd = 'T001003' }
+$stations = [ordered]@{ bx = 'T000702'; jh = 'T000919'; bd = 'T001003'; qg = 'T700015'; ap = 'T700036' }
 $taipeiNow = [DateTime]::UtcNow.AddHours(8)
 
 # Chinese words in the CWA page, written as \u escapes so this file stays plain ASCII
