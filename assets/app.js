@@ -238,8 +238,11 @@
       const f = x.tide.f;
       c.tide = x.tide.rising ? (f < 0.12 ? -3 : f <= 0.85 ? 10 : 5) : (f < 0.18 ? 5 : f <= 0.6 ? 3 : -3);
     }
-    const s = x.sst;
-    c.sst = s == null ? 0 : s < 14 ? -15 : s < 17 ? -6 : s <= 27 ? 0 : s <= 29 ? -3 : -6;
+    const s = x.sst, bream = spot.fish === '黑鯛';
+    if (bream) c.sst = s == null ? 0 : s < 13 ? -30 : s < 15 ? -20 : s < 17 ? -10 : s < 19 ? 3 : s < 24 ? 8 : s < 26 ? 4 : s < 27 ? 0 : s < 28 ? -5 : s < 29 ? -10 : -15;
+    else c.sst = s == null ? 0 : s < 14 ? -15 : s < 17 ? -6 : s <= 27 ? 0 : s <= 29 ? -3 : -6;
+    const ds = x.dsst24;
+    c.dsst = ds == null ? 0 : ds <= -1.5 ? (bream ? -10 : -5) : ds <= -0.8 ? (bream ? -5 : -2) : bream && ds >= 0.8 && s != null && s < 20 ? 3 : 0;
     c.light = 0;
     if (sun) {
       const t = x.t + H / 2;
@@ -323,6 +326,8 @@
         const t = dayT + h * H;
         const pres = g(fc, fi, 'pressure_msl', t), pres24 = g(fc, fi, 'pressure_msl', t - D);
         let sst = g(mr, mi, 'sea_surface_temperature', t), sstEst = false;
+        const sst24 = g(mr, mi, 'sea_surface_temperature', t - D);
+        const dsst24 = sst != null && sst24 != null ? sst - sst24 : null;
         if (sst != null) lastSst = sst; else if (lastSst != null) { sst = lastSst; sstEst = true; }
         const x = {
           t, hour: h, date,
@@ -331,7 +336,7 @@
           wg: g(fc, fi, 'wind_gusts_10m', t), vis: g(fc, fi, 'visibility', t), pres,
           dp24: pres != null && pres24 != null ? pres - pres24 : null,
           wave: g(mr, mi, 'wave_height', t), wper: g(mr, mi, 'wave_period', t), wdir: g(mr, mi, 'wave_direction', t),
-          sst, sstEst,
+          sst, sstEst, dsst24,
           tide: tideAt(events, t + H / 2)
         };
         x.tideH = x.tide ? x.tide.h : null;
@@ -360,6 +365,7 @@
         domDir,
         waveMax: waves.length ? Math.max(...waves) : null,
         sst: mean(ssts), sstEst: hours.every(x => x.sst == null || x.sstEst),
+        dsst: nn(hours.map(x => x.dsst24)).reduce((a, b) => Math.min(a, b), Infinity),
         dp: dps.length ? dps[Math.floor(dps.length / 2)] : null,
         visMin: nn(fishH.map(x => x.vis)).reduce((a, b) => Math.min(a, b), Infinity),
         thunder: hours.some(x => x.code != null && x.code >= 95),
@@ -370,6 +376,7 @@
       };
       if (day.gustMax < 0) day.gustMax = null;
       if (day.visMin === Infinity) day.visMin = null;
+      if (day.dsst === Infinity) day.dsst = null;
       day.isRain = day.thunder || day.rainSum >= 1 || day.ppMax >= 60;
       day.windMaxB = beaufort(day.windMax);
 
@@ -457,8 +464,21 @@
     if (d.info.range === 'big') a.push('大潮水流很快、難釣，盡量挑滿潮或乾潮轉流前後下竿，鉛錘要加重。');
     else if (d.info.range === 'mid') a.push('中潮水流偏快，挑轉流前後下竿比較好控線。');
     else if (d.info.range === 'small') a.push(`小潮水流緩、好控線，是釣${fishOf(spot)}的好潮。`);
-    if (d.sst != null && d.sst < 17) a.push(`海水溫約 ${fmt1(d.sst)}°C 偏低，${fishOf(spot)}活性差，選中午前後水溫較高的時段。`);
-    if (d.sst != null && d.sst > 28) a.push(`海水溫約 ${fmt1(d.sst)}°C 偏高，${fishOf(spot)}多在清晨、傍晚或陰天覓食。`);
+    const st = d.sst, sv = fmt1(st);
+    if (st != null && spot.fish === '黑鯛') {
+      if (st < 15) a.push(`海水溫約 ${sv}°C 太冷，黑鯛幾乎不開口，建議改天。`);
+      else if (st < 17) a.push(`海水溫約 ${sv}°C 偏冷，黑鯛活性差，選中午前後水溫較高的時段。`);
+      else if (st < 19) a.push(`海水溫約 ${sv}°C 略低但可以釣，中午前後水溫回升時較好。`);
+      else if (st < 24) a.push(`海水溫約 ${sv}°C，正好是黑鯛最活躍的水溫（19–24°C）。`);
+      else if (st < 27) a.push(`海水溫約 ${sv}°C，黑鯛還算活躍。`);
+      else if (st < 29) a.push(`海水溫約 ${sv}°C 偏高，黑鯛多在清晨、傍晚或陰天覓食，中午咬口差。`);
+      else a.push(`海水溫約 ${sv}°C 太熱，黑鯛躲到深處、咬口差，只建議清晨或傍晚短時間釣。`);
+    } else if (st != null) {
+      if (st < 17) a.push(`海水溫約 ${sv}°C 偏低，${fishOf(spot)}活性差，選中午前後水溫較高的時段。`);
+      if (st > 28) a.push(`海水溫約 ${sv}°C 偏高，${fishOf(spot)}多在清晨、傍晚或陰天覓食。`);
+    }
+    if (d.dsst != null && d.dsst <= -0.8) a.push(`海水溫一天內降了 ${fmt1(-d.dsst)}°C（冷鋒或冷水進來），${fishOf(spot)}容易停口，最好等水溫穩定 2–3 天。`);
+    if (d.sstEst) a.push('這天超出海水溫預報範圍，水溫沿用最後一天的預報。');
     if (d.dp != null && d.dp <= -4) a.push('氣壓下降中（鋒面接近前），魚通常比較活躍。');
     if (d.dp != null && d.dp >= 5) a.push(`冷鋒過後氣壓回升，${fishOf(spot)}咬口通常變差。`);
     if (d.visMin != null && d.visMin < 1000) a.push('可能起霧、能見度低，出入港注意安全。');
@@ -484,7 +504,8 @@
       ['陣風', d.comp.gust, wg ? `最大 ${fmt1(wg)} m/s` : ''],
       ['浪高' + (spot.wf < 1 ? (spot.shore ? '（岸釣影響較小）' : '（港內影響小）') : ''), d.comp.wave, wave >= 0 ? `最大 ${fmt1(wave)} m` : '無預報'],
       ['降雨', d.comp.rain, `機率最高 ${Math.max(...nn(w.map(x => x.pp)), 0)}%，${fmt1(w.reduce((s, x) => s + (x.pr || 0), 0))} mm`],
-      ['海水溫', d.comp.sst, d.sst != null ? fmt1(avg('sst')) + '°C' : ''],
+      [spot.fish === '黑鯛' ? '海水溫（黑鯛最愛 19–24°C）' : '海水溫', d.comp.sst, d.sst != null ? fmt1(avg('sst')) + '°C' : ''],
+      ['水溫變化', d.comp.dsst, avg('dsst24') != null ? (avg('dsst24') > 0 ? '+' : '') + fmt1(avg('dsst24')) + '°C / 24h' : ''],
       ['晨昏時段', d.comp.light, ''],
       ['氣壓變化', d.comp.pres, avg('dp24') != null ? (avg('dp24') > 0 ? '+' : '') + fmt1(avg('dp24')) + ' hPa / 24h' : ''],
       ['能見度', d.comp.vis, avg('vis') != null ? fmt1(avg('vis') / 1000) + ' km' : ''],
@@ -664,7 +685,7 @@
       const rain = d.ppMax >= 10 || d.isRain ? `<span class="rain${d.isRain ? ' wet' : ''}">${d.thunder ? '⚡' : '💧'}${d.ppMax ?? 0}%</span>` : '';
       return `<td class="${cls}${isWeekend(d.date) ? ' we' : ''}${sel ? ' sel' : ''}" data-spot="${m.spot.key}" data-date="${d.date}" title="${m.spot.name} ${dlabel(d.date)} ${d.rating.txt}${d.win ? '\n' + d.win.label + ' ' + d.win.tideText : ''}">
         <div class="num">${d.score == null ? '—' : d.score}</div><div class="lbl">${d.score == null ? (d.status === 'past' ? '已過' : '無資料') : d.rating.txt + star}</div>
-        <div class="meta">${meta}</div>${rain}</td>`;
+        <div class="meta">${meta}</div>${sstTag(d)}${rain}</td>`;
     };
     const dayHead = d => `<b>${d.date.slice(5).replace('-', '/').replace(/^0/, '')}</b><small>${WK[new Date(parseL(d.date)).getUTCDay()]}・${RANGE_TXT[d.info.range] || ''}${d.di === 0 ? '・今' : ''}</small>`;
     let h;
@@ -677,9 +698,15 @@
       vis.forEach(m => { h += `<tr><th class="spot"><i class="dot" style="background:${m.spot.color}"></i>${m.spot.name}</th>${m.days.map((d, i) => cell(m, d, i)).join('')}</tr>`; });
     }
     h += '</tbody></table>';
-    h += '<div class="scale"><span class="c4">75+ 適合</span><span class="c3">60–74 尚可</span><span class="c2">45–59 勉強</span><span class="c1">&lt;45 不適合 / 危險</span><span class="c0">無資料</span><span class="note">★＝當天勾選的釣點中最好　虛線框＝週末　節＝白天平均風速　m＝最大浪高</span></div>';
+    h += '<div class="scale"><span class="c4">75+ 適合</span><span class="c3">60–74 尚可</span><span class="c2">45–59 勉強</span><span class="c1">&lt;45 不適合 / 危險</span><span class="c0">無資料</span><span class="note">★＝當天勾選的釣點中最好　虛線框＝週末　節＝白天平均風速　m＝最大浪高　' + (isNarrow() ? '最下方溫度' : '水') + '＝海水溫（綠＝黑鯛最佳 19–24°C、橘＝偏熱、藍＝偏冷、↓＝一天內驟降）</span></div>';
     $('heatmap').innerHTML = h;
     $('heatmap').querySelectorAll('td[data-spot]').forEach(td => td.addEventListener('click', () => openDetail(td.dataset.spot, td.dataset.date)));
+  }
+
+  function sstTag(d) {
+    if (d.sst == null) return '';
+    const s = d.sst, cls = s < 17 ? 'cold' : s < 19 ? 'cool' : s < 24 ? 'best' : s < 27 ? 'ok' : 'hot';
+    return `<div class="sst ${cls}${d.dsst != null && d.dsst <= -0.8 ? ' drop' : ''}"><span class="w">水</span>${fmt1(s)}°</div>`;
   }
 
   function eventsHtml(d) {
@@ -898,7 +925,10 @@
         <li>彰濱八仙：北風 +8、南風 −18（最差風向）。</li>
         <li>浪：0.6 m 內不扣，1 m −6、1.5 m −15、2 m −28；布袋南港內在港內，浪的影響只算約三分之一。</li>
         <li>雨：毛毛雨 −3（黑鯛不怕小雨）、1 mm/h −10、4 mm/h −20、10 mm/h −35、雷雨 −40（且總分最多 35）。</li>
-        <li>海水溫 17–27°C 不扣，偏冷、偏熱扣分；晨昏 +5、深夜 −5；鋒面前降壓 +3、冷鋒後回升 −8；起霧 −12。</li>
+        <li><b>海水溫（黑鯛）</b>：19–24°C +8（最活躍）、17–19 / 24–26°C +3 / +4、26–27°C 0、27–28°C −5、28–29°C −10、29°C 以上 −15；17°C 以下 −10、15°C 以下 −20、13°C 以下 −30。</li>
+        <li><b>水溫變化（黑鯛）</b>：一天內降 0.8°C −5、降 1.5°C 以上 −10（冷鋒、冷水進來會停口）；20°C 以下回暖 0.8°C +3。</li>
+        <li>岸釣海水溫：17–27°C 不扣，偏冷、偏熱小扣；水溫驟降扣一半。</li>
+        <li>晨昏 +5、深夜 −5；鋒面前降壓 +3、冷鋒後回升 −8；起霧 −12。</li>
         <li>預估下雨的日子：日雨量 ≥ 1 mm 或降雨機率 ≥ 60%，標 🌧；有雷雨標 ⛈。</li>
       </ul></div>`;
   }

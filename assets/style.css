@@ -199,12 +199,25 @@ table.hours tr.dark td.t { color: #6366f1; }
 
 .foot { text-align: center; font-size: 12px; color: var(--muted); padding: 10px 14px 24px; }
 
+.sst { display: inline-block; margin-top: 2px; padding: 0 4px; border-radius: 4px; font-size: 11px; font-weight: 700; line-height: 16px; background: rgba(255, 255, 255, .7); }
+.sst.best { color: #15803d; }
+.sst.ok { color: #4d7c0f; }
+.sst.cool { color: #0369a1; }
+.sst.cold { color: #1d4ed8; background: #dbeafe; }
+.sst.hot { color: #c2410c; }
+.sst.drop::after { content: "↓"; color: #1d4ed8; }
+
 .back-btn { display: block; width: 100%; margin-top: 12px; padding: 11px; border: 1px solid var(--line); border-radius: 10px; background: #f1f5f9; font: inherit; font-weight: 600; color: #0b4a6e; cursor: pointer; }
 
 /* phone: two-week overview turned sideways, day cards instead of the wide table */
-.heatmap.tall { min-width: 0; border-spacing: 4px; }
-.heatmap.tall td { min-width: 0; padding: 5px 2px 6px; }
-.heatmap.tall th.day { text-align: left; padding-right: 2px; }
+.heatmap.tall { min-width: 0; border-spacing: 3px; }
+.heatmap.tall td { min-width: 0; padding: 4px 1px 5px; }
+.heatmap.tall th.day { text-align: left; padding-right: 2px; white-space: normal; width: 42px; }
+.heatmap.tall th.day small { font-size: 10.5px; line-height: 1.3; }
+.heatmap.tall .meta { font-size: 10px; }
+.heatmap.tall .rain { font-size: 10px; padding: 0 4px; }
+.heatmap.tall .sst { font-size: 10.5px; padding: 0 2px; white-space: nowrap; }
+.heatmap.tall .sst .w { display: none; }
 .heatmap.tall th.spot-h { font-size: 13px; font-weight: 700; color: #334155; }
 .dcards { display: grid; gap: 8px; }
 .dcard { border-radius: 12px; padding: 10px 12px; border: 1px solid transparent; cursor: pointer; }
