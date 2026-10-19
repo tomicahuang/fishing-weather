@@ -27,6 +27,7 @@
       </div>
       <button type="button" class="btn refresh" id="refreshBtn">更新資料</button>
     </div>
+    <div class="ver" id="verInfo"></div>
   </header>
   <nav class="spot-pick" id="spotPick" aria-label="選擇要看的釣點"></nav>
   <div class="status" id="status"></div>
@@ -41,6 +42,14 @@
         </div>
         <div id="curve" class="curve"></div>
         <p class="hint">點曲線上的點可看那天的詳細資料。🌧＝預估下雨　⛈＝可能雷雨</p>
+      </section>
+      <section class="panel">
+        <div class="panel-head">
+          <h2>海水溫度曲線（兩週）</h2>
+          <div class="legend" id="sstLegend"></div>
+        </div>
+        <div id="sstCurve" class="curve"></div>
+        <p class="hint">綠底＝黑鯛最活躍 19–24°C　橘底＝偏熱　藍底＝偏冷　↓＝一天內降 0.8°C 以上　虛線＝超出海溫預報，沿用最後一天</p>
       </section>
     </section>
 

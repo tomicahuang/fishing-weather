@@ -1,7 +1,10 @@
 (function () {
   'use strict';
 
+  const VERSION = 'v1.5', VERSION_DATE = '2026-10-19';   // bump on every upload
   const REMOTE_TIDE = 'https://tomicahuang.github.io/fishing-weather/data/tide-data.js';
+  const COUNTER_URL = 'https://abacus.jasoncameron.dev';
+  const COUNTER_KEY = 'tomicahuang-fishing-weather/views';
   const DAYS = 14;
   const FISH_FIRST = 4;   // earliest hour a fishing window may start
   const FISH_LAST = 20;   // last hour (20:00-21:00) a window may cover
@@ -583,6 +586,63 @@
     $('curveLegend').innerHTML = shown().map(({ spot: s }) => `<span><i class="dot" style="background:${s.color}"></i>${s.name}</span>`).join('');
     $('curve').innerHTML = curveSvg();
     $('curve').querySelectorAll('[data-spot]').forEach(el => el.addEventListener('click', () => openDetail(el.dataset.spot, el.dataset.date)));
+    $('sstLegend').innerHTML = $('curveLegend').innerHTML;
+    $('sstCurve').innerHTML = sstSvg();
+    $('sstCurve').querySelectorAll('[data-spot]').forEach(el => el.addEventListener('click', () => openDetail(el.dataset.spot, el.dataset.date)));
+  }
+
+  function dayAxis(days0, X, HH, nar) {
+    let s = '';
+    days0.forEach((d, i) => {
+      const we = isWeekend(d.date), dt = new Date(parseL(d.date));
+      const dl = nar && i > 0 && dt.getUTCDate() !== 1 ? String(dt.getUTCDate()) : (dt.getUTCMonth() + 1) + '/' + dt.getUTCDate();
+      s += `<text x="${X(i)}" y="${HH - 26}" text-anchor="middle" fill="#334155" font-weight="${we ? 700 : 400}">${dl}</text>`;
+      s += `<text x="${X(i)}" y="${HH - 10}" text-anchor="middle" fill="${we ? '#c2410c' : '#64748b'}">${WK[dt.getUTCDay()]}${d.di === 0 && !nar ? '・今' : ''}</text>`;
+    });
+    return s;
+  }
+
+  function sstSvg() {
+    const nar = isNarrow();
+    const W = nar ? 400 : 1000, HH = nar ? 250 : 290, l = nar ? 34 : 46, r = nar ? 6 : 14, t = 14, b = 46;
+    const pw = W - l - r, ph = HH - t - b, n = DAYS;
+    const vis = shown(), days0 = vis[0].days;
+    const vals = vis.flatMap(m => m.days.map(d => d.sst)).filter(v => v != null);
+    if (!vals.length) return '<p class="hint">暫時抓不到海水溫資料，按「更新資料」再試一次。</p>';
+    let lo = Math.floor(Math.min(...vals) - 0.5), hi = Math.ceil(Math.max(...vals) + 0.5);
+    if (hi - lo < 4) { const mid = (hi + lo) / 2; lo = Math.floor(mid - 2); hi = lo + 4; }
+    const X = i => l + (i + 0.5) * pw / n, Y = v => t + (hi - v) / (hi - lo) * ph;
+    let s = `<svg viewBox="0 0 ${W} ${HH}" xmlns="http://www.w3.org/2000/svg" font-size="${nar ? 11 : 13}" font-family="inherit">`;
+    [[-99, 17, '#dbeafe', '偏冷'], [17, 19, '#e0f2fe', ''], [19, 24, '#dcefe0', '黑鯛最佳 19–24°C'], [24, 27, '#eef5e4', ''], [27, 29, '#fde8d4', '偏熱'], [29, 99, '#fbd5c0', '太熱']].forEach(([a, z, c, txt]) => {
+      const a1 = Math.max(a, lo), z1 = Math.min(z, hi);
+      if (z1 <= a1) return;
+      s += `<rect x="${l}" y="${Y(z1)}" width="${pw}" height="${Y(a1) - Y(z1)}" fill="${c}" opacity=".85"/>`;
+      if (txt && Y(a1) - Y(z1) >= 14) s += `<text x="${l + pw - 4}" y="${Y(z1) + 12}" text-anchor="end" fill="#64748b" font-size="${nar ? 9.5 : 11}">${txt}</text>`;
+    });
+    const step = hi - lo > 6 ? 2 : 1;
+    for (let v = lo; v <= hi; v += step) {
+      s += `<line x1="${l}" x2="${l + pw}" y1="${Y(v)}" y2="${Y(v)}" stroke="#e5e7eb" opacity=".8"/>`;
+      s += `<text x="${l - 5}" y="${Y(v) + 4}" text-anchor="end" fill="#64748b">${v}°</text>`;
+    }
+    const longX = l + 7 * pw / n;
+    s += `<line x1="${longX}" x2="${longX}" y1="${t}" y2="${t + ph}" stroke="#cbd5e1" stroke-dasharray="4 4"/>`;
+    s += dayAxis(days0, X, HH, nar);
+    vis.forEach(m => {
+      m.days.forEach((d, i) => {
+        const p = m.days[i - 1];
+        if (!p || p.sst == null || d.sst == null) return;
+        s += `<line x1="${X(i - 1).toFixed(1)}" y1="${Y(p.sst).toFixed(1)}" x2="${X(i).toFixed(1)}" y2="${Y(d.sst).toFixed(1)}" stroke="${m.spot.color}" stroke-width="2.2" stroke-linecap="round"${d.sstEst ? ' stroke-dasharray="5 4" opacity=".6"' : ''}/>`;
+      });
+    });
+    vis.forEach(m => {
+      m.days.forEach((d, i) => {
+        if (d.sst == null) return;
+        const drop = d.dsst != null && d.dsst <= -0.8;
+        if (drop) s += `<text x="${X(i)}" y="${Y(d.sst) + 16}" text-anchor="middle" fill="#1d4ed8" font-weight="700">↓</text>`;
+        s += `<circle class="pt" data-spot="${m.spot.key}" data-date="${d.date}" cx="${X(i)}" cy="${Y(d.sst)}" r="${nar ? 6 : 8}" fill="transparent"><title>${m.spot.name} ${dlabel(d.date)}：海水溫 ${fmt1(d.sst)}°C${drop ? `\n一天內降 ${fmt1(-d.dsst)}°C` : ''}${d.sstEst ? '\n超出預報，沿用最後一天' : ''}</title></circle>`;
+      });
+    });
+    return s + '</svg>';
   }
 
   function curveSvg() {
@@ -602,11 +662,8 @@
     const longX = l + 7 * pw / n;
     s += `<line x1="${longX}" x2="${longX}" y1="${t}" y2="${t + ph}" stroke="#cbd5e1" stroke-dasharray="4 4"/>`;
     s += `<text x="${longX + 4}" y="${t + ph - 6}" fill="#94a3b8" font-size="${nar ? 9 : 11}">${nar ? '長期預報→' : '右邊為長期預報，僅供參考'}</text>`;
+    s += dayAxis(days0, X, HH, nar);
     days0.forEach((d, i) => {
-      const we = isWeekend(d.date), dt = new Date(parseL(d.date));
-      const dl = nar && i > 0 && dt.getUTCDate() !== 1 ? String(dt.getUTCDate()) : (dt.getUTCMonth() + 1) + '/' + dt.getUTCDate();
-      s += `<text x="${X(i)}" y="${HH - 26}" text-anchor="middle" fill="#334155" font-weight="${we ? 700 : 400}">${dl}</text>`;
-      s += `<text x="${X(i)}" y="${HH - 10}" text-anchor="middle" fill="${we ? '#c2410c' : '#64748b'}">${WK[dt.getUTCDay()]}${d.di === 0 && !nar ? '・今' : ''}</text>`;
       const rainy = vis.some(m => m.days[i].isRain), th = vis.some(m => m.days[i].thunder);
       if (rainy) s += `<text x="${X(i)}" y="${t - 20}" text-anchor="middle" font-size="${nar ? 12 : 15}">${th ? '⛈️' : '🌧️'}</text>`;
       const rg = d.info.range;
@@ -1005,6 +1062,25 @@
     }));
   }
   renderPick();
+
+  function renderVer(views) {
+    $('verInfo').textContent = `版次 ${VERSION}（${VERSION_DATE.slice(5).replace('-', '/')}）` + (views != null ? `｜瀏覽 ${views.toLocaleString()} 次` : '');
+  }
+  // only the published page counts a view, once per browser session; local copies just read the number
+  async function loadViews() {
+    let mode = 'get';
+    try { if (/github\.io$/.test(location.hostname) && !sessionStorage.getItem('fw-counted')) mode = 'hit'; } catch (e) { }
+    try {
+      const r = await fetch(`${COUNTER_URL}/${mode}/${COUNTER_KEY}`, { cache: 'no-store' });
+      if (r.status === 404) { renderVer(0); return; }   // counter not created until the first published visit
+      if (!r.ok) return;
+      const j = await r.json();
+      if (mode === 'hit') try { sessionStorage.setItem('fw-counted', '1'); } catch (e) { }
+      if (typeof j.value === 'number') renderVer(j.value);
+    } catch (e) { }
+  }
+  renderVer(null);
+  loadViews();
 
   let wasNarrow = isNarrow();
   window.addEventListener('resize', () => {
