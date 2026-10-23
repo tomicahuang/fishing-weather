@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  const VERSION = 'v1.6', VERSION_DATE = '2026-10-23';   // bump on every upload
+  const VERSION = 'v1.6', VERSION_DATE = '2026-10-23';   // bump on every upload, together with ?v= in index.html
   const REMOTE_TIDE = 'https://tomicahuang.github.io/fishing-weather/data/tide-data.js';
   const COUNTER_URL = 'https://abacus.jasoncameron.dev';
   const COUNTER_KEY = 'tomicahuang-fishing-weather/views';
