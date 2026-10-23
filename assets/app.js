@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  const VERSION = 'v1.5', VERSION_DATE = '2026-10-19';   // bump on every upload
+  const VERSION = 'v1.6', VERSION_DATE = '2026-10-23';   // bump on every upload
   const REMOTE_TIDE = 'https://tomicahuang.github.io/fishing-weather/data/tide-data.js';
   const COUNTER_URL = 'https://abacus.jasoncameron.dev';
   const COUNTER_KEY = 'tomicahuang-fishing-weather/views';
@@ -19,6 +19,30 @@
     { key: 'bd', name: '布袋南港內', short: '布袋', lat: 23.37, lon: 120.15, tide: '布袋', tideId: 'T001003', wg: 462280, wgName: '布袋港', boat: false, shore: false, wf: 0.35, fish: '黑鯛', windPref: null, color: '#c0503a' },
     { key: 'qg', name: '七股西寮', short: '七股', lat: 23.117, lon: 120.045, tide: '七股', tideId: 'T700015', wg: 286920, wgName: '七股、西寮', boat: false, shore: true, wf: 0.6, fish: '', windPref: null, color: '#8e44ad' },
     { key: 'ap', name: '安平港', short: '安平', lat: 22.988, lon: 120.140, tide: '安平', tideId: 'T700036', wg: 744527, wgName: '安平港', boat: false, shore: true, wf: 0.4, fish: '', windPref: null, color: '#0e7490' }
+  ];
+  // upstream rain points for each river feeding the spots; muddy river water reaches the coast 1-3 days later
+  const BASINS = [
+    { key: 'wu', name: '烏溪', lat: 24.05, lon: 120.75 },
+    { key: 'zs', name: '濁水溪', lat: 23.80, lon: 120.80 },
+    { key: 'bg', name: '北港溪', lat: 23.65, lon: 120.55 },
+    { key: 'bz', name: '八掌溪', lat: 23.45, lon: 120.55 },
+    { key: 'zw', name: '曾文溪', lat: 23.15, lon: 120.47 },
+    { key: 'ys', name: '鹽水溪', lat: 23.05, lon: 120.32 }
+  ];
+  // shelter = share of wind/wave stirring that reaches the spot (harbours are calmer); base = mud-flat murk on a calm day
+  const WATER_SRC = {
+    bx: { basins: ['wu', 'zs'], shelter: 1, base: 8 },
+    jh: { basins: ['zs', 'bg'], shelter: 1, base: 8 },
+    bd: { basins: ['bz'], shelter: 0.55, base: 5 },
+    qg: { basins: ['zw'], shelter: 0.85, base: 6 },
+    ap: { basins: ['ys'], shelter: 0.5, base: 3 }
+  };
+  const WATER_LV = [
+    { max: 15, txt: '很清', cls: 'w1' },
+    { max: 30, txt: '清', cls: 'w2' },
+    { max: 50, txt: '微濁', cls: 'w3' },
+    { max: 70, txt: '濁', cls: 'w4' },
+    { max: Infinity, txt: '很濁', cls: 'w5' }
   ];
   const fishOf = sp => sp.fish || '魚';
   const kindOf = sp => sp.shore ? '岸釣' : '船釣・黑鯛';
@@ -128,14 +152,25 @@
 
   async function fetchWeather() {
     const lat = SPOTS.map(s => s.lat).join(','), lon = SPOTS.map(s => s.lon).join(',');
-    const common = `latitude=${lat}&longitude=${lon}&timezone=Asia%2FTaipei&past_days=1&forecast_days=16`;
+    const common = `latitude=${lat}&longitude=${lon}&timezone=Asia%2FTaipei&past_days=2&forecast_days=16`;
     const fcUrl = 'https://api.open-meteo.com/v1/forecast?' + common +
       '&hourly=temperature_2m,precipitation_probability,precipitation,weather_code,wind_speed_10m,wind_direction_10m,wind_gusts_10m,visibility,pressure_msl' +
       '&daily=sunrise,sunset,weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum,precipitation_probability_max,uv_index_max&wind_speed_unit=ms';
     const mrUrl = 'https://marine-api.open-meteo.com/v1/marine?' + common + '&cell_selection=sea' +
       '&hourly=wave_height,wave_direction,wave_period,sea_surface_temperature,sea_level_height_msl';
-    const [fc, mr] = await Promise.all([getJson(fcUrl), getJson(mrUrl).catch(() => null)]);
-    return { fetched: Date.now(), fc: asArr(fc), mr: mr ? asArr(mr) : null };
+    const bsUrl = 'https://api.open-meteo.com/v1/forecast?latitude=' + BASINS.map(b => b.lat).join(',') + '&longitude=' + BASINS.map(b => b.lon).join(',') +
+      '&timezone=Asia%2FTaipei&past_days=3&forecast_days=16&daily=precipitation_sum';
+    const [fc, mr, bs] = await Promise.all([getJson(fcUrl), getJson(mrUrl).catch(() => null), getJson(bsUrl).catch(() => null)]);
+    let basin = null;
+    if (bs) {
+      basin = {};
+      asArr(bs).forEach((r, i) => {
+        const m = {};
+        if (r.daily) r.daily.time.forEach((d, j) => { m[d] = r.daily.precipitation_sum[j]; });
+        basin[BASINS[i].key] = m;
+      });
+    }
+    return { fetched: Date.now(), fc: asArr(fc), mr: mr ? asArr(mr) : null, basin };
   }
 
   function loadScript(src) {
@@ -296,6 +331,37 @@
     return out;
   }
 
+  // rough water-clarity estimate for the middle of the day: mud stirred up by the last 48 h of wind and waves,
+  // big-tide currents, and river water from upstream rain 1-3 days earlier
+  function waterClarity(spot, dayT, info, dailyMap, hourly) {
+    const src = WATER_SRC[spot.key];
+    const ref = dayT + 12 * H;
+    let wsum = 0, wwt = 0, waveMax = null;
+    for (let k = 0; k < 48; k++) {
+      const tt = ref - k * H, w = k < 24 ? 1 : 0.5;
+      const ws = hourly('wind_speed_10m', tt);
+      if (ws != null) { wsum += ws * w; wwt += w; }
+      const wv = hourly('wave_height', tt);
+      if (wv != null && (waveMax == null || wv > waveMax)) waveMax = wv;
+    }
+    if (!wwt) return null;
+    const ws48 = wsum / wwt;
+    const basinRain = date => {
+      const b = state.wx && state.wx.basin;
+      const up = b ? mean(nn(src.basins.map(k => b[k] && b[k][date]))) : null;
+      const local = dailyMap[date] ? dailyMap[date].rain : null;
+      return (up || 0) + (local || 0) * 0.5;
+    };
+    const rainW = [0.5, 1, 0.6, 0.3].reduce((s, w, i) => s + w * basinRain(dkey(dayT - i * D)), 0);
+    const windP = clamp((ws48 - 2) * 8, 0, 50);
+    const waveP = waveMax == null ? 0 : clamp((waveMax - 0.4) * 22, 0, 25);
+    const tideP = { big: 12, mid: 5, small: 0 }[info.range] || 0;
+    const rainP = clamp(rainW * 1.2, 0, 40);
+    const t = Math.round(clamp(src.base + (windP + waveP) * src.shelter + tideP + rainP, 0, 100));
+    const lv = WATER_LV.find(x => t < x.max);
+    return { t, txt: lv.txt, cls: lv.cls, ws48, waveMax, rainW, range: info.range };
+  }
+
   function buildSpot(spot, idx) {
     const fc = state.wx && state.wx.fc ? state.wx.fc[idx] : null;
     const mr = state.wx && state.wx.mr ? state.wx.mr[idx] : null;
@@ -382,6 +448,7 @@
       if (day.dsst === Infinity) day.dsst = null;
       day.isRain = day.thunder || day.rainSum >= 1 || day.ppMax >= 60;
       day.windMaxB = beaufort(day.windMax);
+      day.water = waterClarity(spot, dayT, info, dailyMap, (k, tt) => g(k === 'wave_height' ? mr : fc, k === 'wave_height' ? mi : fi, k, tt));
 
       // best window
       const first = di === 0 ? Math.max(FISH_FIRST, new Date(now).getUTCHours() + 1) : FISH_FIRST;
@@ -488,6 +555,14 @@
     if (spot.boat && d.waveMax != null && d.waveMax > 1.5) a.push(`浪高最大約 ${fmt1(d.waveMax)} m，船上不舒適也較危險。`);
     if (spot.shore && d.waveMax != null && d.waveMax > 1.5) a.push(`外海浪高約 ${fmt1(d.waveMax)} m，堤防、消波塊容易被浪打，不要站太前面。`);
     if (d.waveMax == null) a.push('這天超出浪的預報範圍，只用風來評估海況。');
+    const wc = d.water;
+    if (wc) {
+      const why = [`前兩天平均風 ${beaufort(wc.ws48)} 級`, wc.waveMax != null ? `浪最大 ${fmt1(wc.waveMax)} m` : '', RANGE_TXT[wc.range] || '',
+        wc.rainW >= 1 ? `${WATER_SRC[spot.key].basins.map(k => BASINS.find(b => b.key === k).name).join('、')}上游近 3 天雨量約 ${Math.round(wc.rainW)} mm` : '上游沒什麼雨'].filter(Boolean).join('、');
+      const f = fishOf(spot);
+      const tip = { w1: `水很清，${f}警戒心高，用細線、選陰天或晨昏較好。`, w2: `水偏清，${f}較謹慎，線組放細一點。`, w3: `微濁是${f}最敢咬的水色。`, w4: `水偏濁，${f}還會咬，餌味要重一點（如蝦、蚵肉）。`, w5: `泥水太濁，${f}不好找餌，建議等水清一點或改去港內。` }[wc.cls];
+      a.push(`預估水色（測試中）：<b>${wc.txt}</b>（${why}）。${tip}同一天退潮時段偏濁、漲潮偏清。`);
+    }
     if (d.long) a.push('這是 7 天後的長期預報，變動大，出發前再確認。');
     if (d.tideSrc === 'model') a.push('這天沒有氣象署潮汐資料，潮時是模型推估。');
     return a;
@@ -589,6 +664,46 @@
     $('sstLegend').innerHTML = $('curveLegend').innerHTML;
     $('sstCurve').innerHTML = sstSvg();
     $('sstCurve').querySelectorAll('[data-spot]').forEach(el => el.addEventListener('click', () => openDetail(el.dataset.spot, el.dataset.date)));
+    $('waterLegend').innerHTML = $('curveLegend').innerHTML;
+    $('waterCurve').innerHTML = waterSvg();
+    $('waterCurve').querySelectorAll('[data-spot]').forEach(el => el.addEventListener('click', () => openDetail(el.dataset.spot, el.dataset.date)));
+  }
+
+  function waterSvg() {
+    const nar = isNarrow();
+    const W = nar ? 400 : 1000, HH = nar ? 250 : 290, l = nar ? 34 : 46, r = nar ? 6 : 14, t = 14, b = 46;
+    const pw = W - l - r, ph = HH - t - b, n = DAYS;
+    const vis = shown(), days0 = vis[0].days;
+    if (!vis.some(m => m.days.some(d => d.water))) return '<p class="hint">暫時算不出水色，按「更新資料」再試一次。</p>';
+    const X = i => l + (i + 0.5) * pw / n, Y = v => t + (100 - v) / 100 * ph;
+    const tint = { w1: '#e0f2fe', w2: '#ccfbf1', w3: '#ecf3d6', w4: '#f3e6d3', w5: '#e9dccb' };
+    let s = `<svg viewBox="0 0 ${W} ${HH}" xmlns="http://www.w3.org/2000/svg" font-size="${nar ? 11 : 13}" font-family="inherit">`;
+    let lo = 0;
+    WATER_LV.forEach(lv => {
+      const hi = Math.min(lv.max, 100);
+      s += `<rect x="${l}" y="${Y(hi)}" width="${pw}" height="${Y(lo) - Y(hi)}" fill="${tint[lv.cls]}"/>`;
+      s += `<text x="${l - 5}" y="${(Y(lo) + Y(hi)) / 2 + 4}" text-anchor="end" fill="#475569" font-size="${nar ? 10.5 : 12}">${lv.txt}</text>`;
+      lo = hi;
+    });
+    const longX = l + 7 * pw / n;
+    s += `<line x1="${longX}" x2="${longX}" y1="${t}" y2="${t + ph}" stroke="#cbd5e1" stroke-dasharray="4 4"/>`;
+    s += dayAxis(days0, X, HH, nar);
+    vis.forEach(m => {
+      let path = '', pen = false;
+      m.days.forEach((d, i) => {
+        if (!d.water) { pen = false; return; }
+        path += (pen ? 'L' : 'M') + X(i).toFixed(1) + ' ' + Y(d.water.t).toFixed(1) + ' ';
+        pen = true;
+      });
+      s += `<path d="${path}" fill="none" stroke="${m.spot.color}" stroke-width="2.2" stroke-linejoin="round"/>`;
+    });
+    vis.forEach(m => {
+      m.days.forEach((d, i) => {
+        if (!d.water) return;
+        s += `<circle class="pt" data-spot="${m.spot.key}" data-date="${d.date}" cx="${X(i)}" cy="${Y(d.water.t)}" r="${nar ? 6 : 8}" fill="transparent"><title>${m.spot.name} ${dlabel(d.date)}：預估水色 ${d.water.txt}</title></circle>`;
+      });
+    });
+    return s + '</svg>';
   }
 
   function dayAxis(days0, X, HH, nar) {
@@ -986,6 +1101,7 @@
         <li><b>水溫變化（黑鯛）</b>：一天內降 0.8°C −5、降 1.5°C 以上 −10（冷鋒、冷水進來會停口）；20°C 以下回暖 0.8°C +3。</li>
         <li>岸釣海水溫：17–27°C 不扣，偏冷、偏熱小扣；水溫驟降扣一半。</li>
         <li>晨昏 +5、深夜 −5；鋒面前降壓 +3、冷鋒後回升 −8；起霧 −12。</li>
+        <li><b>水色預估（測試中，只供參考，不算分；簡易模式看曲線）</b>：看前 48 小時的風（越近越重）與最大浪、大中小潮、上游河川（烏溪、濁水溪、北港溪、八掌溪、曾文溪、鹽水溪）近 3 天雨量，分很清／清／微濁／濁／很濁五級；布袋、安平港內風浪影響約減半。</li>
         <li>預估下雨的日子：日雨量 ≥ 1 mm 或降雨機率 ≥ 60%，標 🌧；有雷雨標 ⛈。</li>
       </ul></div>`;
   }
