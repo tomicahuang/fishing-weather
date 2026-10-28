@@ -1,11 +1,12 @@
 (function () {
   'use strict';
 
-  const VERSION = 'v1.6', VERSION_DATE = '2026-10-23';   // bump on every upload, together with ?v= in index.html
+  const VERSION = 'v1.7', VERSION_DATE = '2026-10-28';   // bump on every upload, together with ?v= in index.html
   const REMOTE_TIDE = 'https://tomicahuang.github.io/fishing-weather/data/tide-data.js';
   const COUNTER_URL = 'https://abacus.jasoncameron.dev';
   const COUNTER_KEY = 'tomicahuang-fishing-weather/views';
   const DAYS = 14;
+  const PAST = 3;         // past days shown on the simple-mode curves for the trend
   const FISH_FIRST = 4;   // earliest hour a fishing window may start
   const FISH_LAST = 20;   // last hour (20:00-21:00) a window may cover
   const WIN = 3;          // hours in a recommended window
@@ -152,14 +153,15 @@
 
   async function fetchWeather() {
     const lat = SPOTS.map(s => s.lat).join(','), lon = SPOTS.map(s => s.lon).join(',');
-    const common = `latitude=${lat}&longitude=${lon}&timezone=Asia%2FTaipei&past_days=2&forecast_days=16`;
+    // past days cover the PAST days on the curves plus 48 h of wind history for the water estimate
+    const common = `latitude=${lat}&longitude=${lon}&timezone=Asia%2FTaipei&past_days=${PAST + 2}&forecast_days=16`;
     const fcUrl = 'https://api.open-meteo.com/v1/forecast?' + common +
       '&hourly=temperature_2m,precipitation_probability,precipitation,weather_code,wind_speed_10m,wind_direction_10m,wind_gusts_10m,visibility,pressure_msl' +
       '&daily=sunrise,sunset,weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum,precipitation_probability_max,uv_index_max&wind_speed_unit=ms';
     const mrUrl = 'https://marine-api.open-meteo.com/v1/marine?' + common + '&cell_selection=sea' +
       '&hourly=wave_height,wave_direction,wave_period,sea_surface_temperature,sea_level_height_msl';
     const bsUrl = 'https://api.open-meteo.com/v1/forecast?latitude=' + BASINS.map(b => b.lat).join(',') + '&longitude=' + BASINS.map(b => b.lon).join(',') +
-      '&timezone=Asia%2FTaipei&past_days=3&forecast_days=16&daily=precipitation_sum';
+      `&timezone=Asia%2FTaipei&past_days=${PAST + 3}&forecast_days=16&daily=precipitation_sum`;
     const [fc, mr, bs] = await Promise.all([getJson(fcUrl), getJson(mrUrl).catch(() => null), getJson(bsUrl).catch(() => null)]);
     let basin = null;
     if (bs) {
@@ -384,9 +386,9 @@
     const today = dkey(now);
     const t0 = parseL(today);
     let lastSst = null;
-    const days = [];
+    const days = [], past = [];
 
-    for (let di = 0; di < DAYS; di++) {
+    for (let di = -PAST; di < DAYS; di++) {
       const dayT = t0 + di * D;
       const date = dkey(dayT);
       const sun = sunMap[date] || { rise: dayT + 5.8 * H, set: dayT + 17.5 * H, approx: true };
@@ -451,24 +453,33 @@
       day.water = waterClarity(spot, dayT, info, dailyMap, (k, tt) => g(k === 'wave_height' ? mr : fc, k === 'wave_height' ? mi : fi, k, tt));
 
       // best window
-      const first = di === 0 ? Math.max(FISH_FIRST, new Date(now).getUTCHours() + 1) : FISH_FIRST;
-      let best = null;
-      for (let len = WIN; len >= 1 && !best; len--) {
-        for (let st = first; st + len - 1 <= FISH_LAST; st++) {
-          const w = hours.slice(st, st + len);
-          if (!w.every(x => x.ok)) continue;
-          const m = mean(w.map(x => x.ev.score));
-          if (!best || m > best.mean) best = { st, len, mean: m, hours: w };
+      const findBest = from => {
+        let best = null;
+        for (let len = WIN; len >= 1 && !best; len--) {
+          for (let st = from; st + len - 1 <= FISH_LAST; st++) {
+            const w = hours.slice(st, st + len);
+            if (!w.every(x => x.ok)) continue;
+            const m = mean(w.map(x => x.ev.score));
+            if (!best || m > best.mean) best = { st, len, mean: m, hours: w };
+          }
         }
-      }
-      if (best) {
+        if (!best) return null;
         let score = best.mean + (RANGE_BONUS[info.range] || 0);
         const wMax = Math.max(...nn(best.hours.map(x => x.ws)), 0);
         const notes = [];
         if (wMax >= 10.8) { score = Math.min(score, 40); notes.push('風達 6 級，不宜出船'); }
         if (best.hours.some(x => x.ev.thunder)) { score = Math.min(score, 35); notes.push('雷雨'); }
         if (best.len < WIN) { score -= 8; notes.push('可開船時間短'); }
-        day.score = Math.round(clamp(score, 0, 100));
+        return { ...best, notes, score: Math.round(clamp(score, 0, 100)) };
+      };
+      const first = di === 0 ? Math.max(FISH_FIRST, new Date(now).getUTCHours() + 1) : FISH_FIRST;
+      const best = findBest(first);
+      // whole-day score keeps the trend curve continuous after today's windows have passed
+      const whole = first === FISH_FIRST ? best : findBest(FISH_FIRST);
+      day.dayScore = whole ? whole.score : 10;
+      if (best) {
+        const notes = best.notes;
+        day.score = best.score;
         const tt = tideText(best.hours);
         day.win = {
           st: best.st, len: best.len, hours: best.hours, notes,
@@ -487,9 +498,9 @@
         day.comp = null;
       }
       day.rating = rating(day.score);
-      days.push(day);
+      (di < 0 ? past : days).push(day);
     }
-    return { spot, events, days, fc, mr };
+    return { spot, events, days, past, fc, mr };
   }
 
   function rebuild() {
@@ -505,7 +516,7 @@
       if (!best || d.score > best.day.score) best = { spot: m.spot, day: d };
     }
     state.best = best;
-    const selOk = vis.some(m => m.spot.key === state.sel.spot) && vis[0].days.some(d => d.date === state.sel.date);
+    const selOk = vis.some(m => m.spot.key === state.sel.spot) && allDays(vis[0]).some(d => d.date === state.sel.date);
     if (!state.sel.user || !selOk) {
       state.sel = best ? { spot: best.spot.key, date: best.day.date } : { spot: vis[0].spot.key, date: vis[0].days[0].date };
     }
@@ -515,6 +526,7 @@
   function advice(spot, d) {
     const a = [];
     if (d.status === 'past') return ['今天適合的時段已過，請看明天以後。'];
+    if (d.di < 0) a.push(`這是 ${-d.di} 天前（已經過去），用當天實際的天氣重新評分，給你對照趨勢。`);
     if (d.status === 'dry') a.push(`04:00–21:00 都卡在乾潮前後 ${blockHours(spot)} 小時，船出不去會擱淺。`);
     if (d.win) a.push(`建議 <b>${d.win.label}</b> ${d.win.tideText}。`);
     if (d.status !== 'dry' && spot.boat) {
@@ -669,11 +681,20 @@
     $('waterCurve').querySelectorAll('[data-spot]').forEach(el => el.addEventListener('click', () => openDetail(el.dataset.spot, el.dataset.date)));
   }
 
+  const allDays = m => m.past.concat(m.days);
+  const N_ALL = PAST + DAYS;
+  function pastShade(l, X, t, ph, nar) {
+    const xe = (X(PAST - 1) + X(PAST)) / 2;
+    return `<rect x="${l}" y="${t}" width="${xe - l}" height="${ph}" fill="#64748b" opacity=".13"/>` +
+      `<line x1="${xe}" x2="${xe}" y1="${t}" y2="${t + ph}" stroke="#475569" stroke-width="1.2"/>` +
+      `<text x="${(l + xe) / 2}" y="${t + ph - 6}" text-anchor="middle" fill="#475569" font-size="${nar ? 9.5 : 11}">過去 ${PAST} 天</text>`;
+  }
+
   function waterSvg() {
     const nar = isNarrow();
     const W = nar ? 400 : 1000, HH = nar ? 250 : 290, l = nar ? 34 : 46, r = nar ? 6 : 14, t = 14, b = 46;
-    const pw = W - l - r, ph = HH - t - b, n = DAYS;
-    const vis = shown(), days0 = vis[0].days;
+    const pw = W - l - r, ph = HH - t - b, n = N_ALL;
+    const vis = shown(), days0 = allDays(vis[0]);
     if (!vis.some(m => m.days.some(d => d.water))) return '<p class="hint">暫時算不出水色，按「更新資料」再試一次。</p>';
     const X = i => l + (i + 0.5) * pw / n, Y = v => t + (100 - v) / 100 * ph;
     const tint = { w1: '#e0f2fe', w2: '#ccfbf1', w3: '#ecf3d6', w4: '#f3e6d3', w5: '#e9dccb' };
@@ -685,12 +706,13 @@
       s += `<text x="${l - 5}" y="${(Y(lo) + Y(hi)) / 2 + 4}" text-anchor="end" fill="#475569" font-size="${nar ? 10.5 : 12}">${lv.txt}</text>`;
       lo = hi;
     });
-    const longX = l + 7 * pw / n;
+    s += pastShade(l, X, t, ph, nar);
+    const longX = l + (PAST + 7) * pw / n;
     s += `<line x1="${longX}" x2="${longX}" y1="${t}" y2="${t + ph}" stroke="#cbd5e1" stroke-dasharray="4 4"/>`;
     s += dayAxis(days0, X, HH, nar);
     vis.forEach(m => {
       let path = '', pen = false;
-      m.days.forEach((d, i) => {
+      allDays(m).forEach((d, i) => {
         if (!d.water) { pen = false; return; }
         path += (pen ? 'L' : 'M') + X(i).toFixed(1) + ' ' + Y(d.water.t).toFixed(1) + ' ';
         pen = true;
@@ -698,7 +720,7 @@
       s += `<path d="${path}" fill="none" stroke="${m.spot.color}" stroke-width="2.2" stroke-linejoin="round"/>`;
     });
     vis.forEach(m => {
-      m.days.forEach((d, i) => {
+      allDays(m).forEach((d, i) => {
         if (!d.water) return;
         s += `<circle class="pt" data-spot="${m.spot.key}" data-date="${d.date}" cx="${X(i)}" cy="${Y(d.water.t)}" r="${nar ? 6 : 8}" fill="transparent"><title>${m.spot.name} ${dlabel(d.date)}：預估水色 ${d.water.txt}</title></circle>`;
       });
@@ -710,7 +732,7 @@
     let s = '';
     days0.forEach((d, i) => {
       const we = isWeekend(d.date), dt = new Date(parseL(d.date));
-      const dl = nar && i > 0 && dt.getUTCDate() !== 1 ? String(dt.getUTCDate()) : (dt.getUTCMonth() + 1) + '/' + dt.getUTCDate();
+      const dl = nar && dt.getUTCDate() !== 1 ? String(dt.getUTCDate()) : (dt.getUTCMonth() + 1) + '/' + dt.getUTCDate();
       s += `<text x="${X(i)}" y="${HH - 26}" text-anchor="middle" fill="#334155" font-weight="${we ? 700 : 400}">${dl}</text>`;
       s += `<text x="${X(i)}" y="${HH - 10}" text-anchor="middle" fill="${we ? '#c2410c' : '#64748b'}">${WK[dt.getUTCDay()]}${d.di === 0 && !nar ? '・今' : ''}</text>`;
     });
@@ -720,9 +742,9 @@
   function sstSvg() {
     const nar = isNarrow();
     const W = nar ? 400 : 1000, HH = nar ? 250 : 290, l = nar ? 34 : 46, r = nar ? 6 : 14, t = 14, b = 46;
-    const pw = W - l - r, ph = HH - t - b, n = DAYS;
-    const vis = shown(), days0 = vis[0].days;
-    const vals = vis.flatMap(m => m.days.map(d => d.sst)).filter(v => v != null);
+    const pw = W - l - r, ph = HH - t - b, n = N_ALL;
+    const vis = shown(), days0 = allDays(vis[0]);
+    const vals = vis.flatMap(m => allDays(m).map(d => d.sst)).filter(v => v != null);
     if (!vals.length) return '<p class="hint">暫時抓不到海水溫資料，按「更新資料」再試一次。</p>';
     let lo = Math.floor(Math.min(...vals) - 0.5), hi = Math.ceil(Math.max(...vals) + 0.5);
     if (hi - lo < 4) { const mid = (hi + lo) / 2; lo = Math.floor(mid - 2); hi = lo + 4; }
@@ -739,18 +761,20 @@
       s += `<line x1="${l}" x2="${l + pw}" y1="${Y(v)}" y2="${Y(v)}" stroke="#e5e7eb" opacity=".8"/>`;
       s += `<text x="${l - 5}" y="${Y(v) + 4}" text-anchor="end" fill="#64748b">${v}°</text>`;
     }
-    const longX = l + 7 * pw / n;
+    s += pastShade(l, X, t, ph, nar);
+    const longX = l + (PAST + 7) * pw / n;
     s += `<line x1="${longX}" x2="${longX}" y1="${t}" y2="${t + ph}" stroke="#cbd5e1" stroke-dasharray="4 4"/>`;
     s += dayAxis(days0, X, HH, nar);
     vis.forEach(m => {
-      m.days.forEach((d, i) => {
-        const p = m.days[i - 1];
+      const ds = allDays(m);
+      ds.forEach((d, i) => {
+        const p = ds[i - 1];
         if (!p || p.sst == null || d.sst == null) return;
         s += `<line x1="${X(i - 1).toFixed(1)}" y1="${Y(p.sst).toFixed(1)}" x2="${X(i).toFixed(1)}" y2="${Y(d.sst).toFixed(1)}" stroke="${m.spot.color}" stroke-width="2.2" stroke-linecap="round"${d.sstEst ? ' stroke-dasharray="5 4" opacity=".6"' : ''}/>`;
       });
     });
     vis.forEach(m => {
-      m.days.forEach((d, i) => {
+      allDays(m).forEach((d, i) => {
         if (d.sst == null) return;
         const drop = d.dsst != null && d.dsst <= -0.8;
         if (drop) s += `<text x="${X(i)}" y="${Y(d.sst) + 16}" text-anchor="middle" fill="#1d4ed8" font-weight="700">↓</text>`;
@@ -763,9 +787,9 @@
   function curveSvg() {
     const nar = isNarrow();
     const W = nar ? 400 : 1000, HH = nar ? 300 : 340, l = nar ? 28 : 40, r = nar ? 6 : 14, t = 40, b = 46;
-    const pw = W - l - r, ph = HH - t - b, n = DAYS;
+    const pw = W - l - r, ph = HH - t - b, n = N_ALL;
     const X = i => l + (i + 0.5) * pw / n, Y = s => t + (100 - s) / 100 * ph;
-    const vis = shown(), days0 = vis[0].days;
+    const vis = shown(), days0 = allDays(vis[0]);
     let s = `<svg viewBox="0 0 ${W} ${HH}" xmlns="http://www.w3.org/2000/svg" font-size="${nar ? 11 : 13}" font-family="inherit">`;
     [[75, 100, '#dcefe0'], [60, 75, '#f3efcc'], [45, 60, '#f8e4d6'], [0, 45, '#f6e0e0']].forEach(([a, z, c]) => {
       s += `<rect x="${l}" y="${Y(z)}" width="${pw}" height="${Y(a) - Y(z)}" fill="${c}" opacity=".75"/>`;
@@ -774,28 +798,33 @@
       s += `<line x1="${l}" x2="${l + pw}" y1="${Y(v)}" y2="${Y(v)}" stroke="#e5e7eb"/>`;
       s += `<text x="${l - 6}" y="${Y(v) + 4}" text-anchor="end" fill="#64748b">${v}</text>`;
     });
-    const longX = l + 7 * pw / n;
+    s += pastShade(l, X, t, ph, nar);
+    const longX = l + (PAST + 7) * pw / n;
     s += `<line x1="${longX}" x2="${longX}" y1="${t}" y2="${t + ph}" stroke="#cbd5e1" stroke-dasharray="4 4"/>`;
     s += `<text x="${longX + 4}" y="${t + ph - 6}" fill="#94a3b8" font-size="${nar ? 9 : 11}">${nar ? '長期預報→' : '右邊為長期預報，僅供參考'}</text>`;
     s += dayAxis(days0, X, HH, nar);
     days0.forEach((d, i) => {
-      const rainy = vis.some(m => m.days[i].isRain), th = vis.some(m => m.days[i].thunder);
+      const rainy = vis.some(m => allDays(m)[i].isRain), th = vis.some(m => allDays(m)[i].thunder);
       if (rainy) s += `<text x="${X(i)}" y="${t - 20}" text-anchor="middle" font-size="${nar ? 12 : 15}">${th ? '⛈️' : '🌧️'}</text>`;
       const rg = d.info.range;
       if (rg) s += `<text x="${X(i)}" y="${t - 6}" text-anchor="middle" font-size="${nar ? 10 : 11}" fill="#94a3b8">${nar ? RANGE_TXT[rg].slice(0, 1) : RANGE_TXT[rg]}</text>`;
     });
     vis.forEach(m => {
       let path = '', pen = false;
-      m.days.forEach((d, i) => {
-        if (d.score == null) { pen = false; return; }
-        path += (pen ? 'L' : 'M') + X(i).toFixed(1) + ' ' + Y(d.score).toFixed(1) + ' ';
+      allDays(m).forEach((d, i) => {
+        const v = d.score ?? d.dayScore;
+        if (v == null) { pen = false; return; }
+        path += (pen ? 'L' : 'M') + X(i).toFixed(1) + ' ' + Y(v).toFixed(1) + ' ';
         pen = true;
       });
       s += `<path d="${path}" fill="none" stroke="${m.spot.color}" stroke-width="2.2" stroke-linejoin="round"/>`;
     });
     vis.forEach(m => {
-      m.days.forEach((d, i) => {
-        if (d.score == null) return;
+      allDays(m).forEach((d, i) => {
+        if (d.score == null) {
+          if (d.dayScore != null) s += `<circle class="pt" data-spot="${m.spot.key}" data-date="${d.date}" cx="${X(i)}" cy="${Y(d.dayScore)}" r="${nar ? 7 : 10}" fill="transparent"><title>${m.spot.name} ${dlabel(d.date)}：全天 ${d.dayScore} 分（今天的時段已過）</title></circle>`;
+          return;
+        }
         const isBest = state.best && state.best.spot.key === m.spot.key && state.best.day.date === d.date;
         if (isBest) {
           s += `<circle cx="${X(i)}" cy="${Y(d.score)}" r="5" fill="${m.spot.color}"/>`;
@@ -1011,7 +1040,7 @@
 
   function renderDetail() {
     const m = state.model.find(x => x.spot.key === state.sel.spot);
-    const d = m.days.find(x => x.date === state.sel.date) || m.days[0];
+    const d = allDays(m).find(x => x.date === state.sel.date) || m.days[0];
     const sp = m.spot;
     const adv = advice(sp, d).map(t => `<p>• ${t}</p>`).join('');
     const boat = sp.boat ? `<div class="boatwin ${d.boatRanges && d.boatRanges.length ? '' : 'no'}">🚤 可開船時段：<b>${rangesTxt(d.boatRanges).replace(/<br>/g, '、')}</b>；乾潮前後 ${blockHours(sp)} 小時水太淺會擱淺${d.events.filter(e => e.type === 'L').map(e => `（乾潮 ${hm(e.t)}：${hm(e.t - blockHours(sp) * H)}–${hm(e.t + blockHours(sp) * H)} 不能開船）`).join('')}</div>`
@@ -1036,7 +1065,7 @@
     });
     $('detail').innerHTML = `
       <div class="detail-head">
-        <h2 style="border-left:6px solid ${sp.color};padding-left:8px">${sp.name} <small class="kind">${kindOf(sp)}</small>　${dlabel(d.date)}${d.di === 0 ? ' 今天' : ''}</h2>
+        <h2 style="border-left:6px solid ${sp.color};padding-left:8px">${sp.name} <small class="kind">${kindOf(sp)}</small>　${dlabel(d.date)}${d.di === 0 ? ' 今天' : d.di < 0 ? ` <small class="kind">${-d.di} 天前</small>` : ''}</h2>
         <div><span class="r ${d.rating.cls}" style="font-size:15px">${d.rating.txt} ${d.score ?? ''}</span>　${moonIcon(d.info.lunarDay)} 農曆 ${d.info.lunar}　<span class="range-${d.info.range}">${RANGE_TXT[d.info.range] || ''}</span>${d.isRain ? `　<span class="rain-tag${d.thunder ? ' thunder' : ''}">${d.thunder ? '⛈ 雷雨' : '🌧 預估下雨'}</span>` : ''}</div>
       </div>
       <h3>潮汐曲線（${sp.tide}${d.tideSrc === 'model' ? '，模型推估' : '，中央氣象署'}）　<small style="font-weight:400;color:#64748b"><span style="color:#15803d">綠線＝漲潮</span>　<span style="color:#c2410c">橘線＝退潮</span>　黃底＝建議時段　灰底＝夜間　單位 cm（相對平均海平面）</small></h3>
@@ -1102,6 +1131,8 @@
         <li>岸釣海水溫：17–27°C 不扣，偏冷、偏熱小扣；水溫驟降扣一半。</li>
         <li>晨昏 +5、深夜 −5；鋒面前降壓 +3、冷鋒後回升 −8；起霧 −12。</li>
         <li><b>水色預估（測試中，只供參考，不算分；簡易模式看曲線）</b>：看前 48 小時的風（越近越重）與最大浪、大中小潮、上游河川（烏溪、濁水溪、北港溪、八掌溪、曾文溪、鹽水溪）近 3 天雨量，分很清／清／微濁／濁／很濁五級；布袋、安平港內風浪影響約減半。</li>
+        <li><b>過去 3 天</b>：簡易模式三條曲線左邊灰底是過去 3 天，用當天實際的天氣重新評分，方便看趨勢；潮汐每次更新會保留最近 7 天的氣象署資料。</li>
+        <li><b>匯出紀錄</b>：存成 Excel 檔（.xlsx），第一頁「目錄」可點釣點名字跳頁；每個勾選的釣點一頁，列出過去 3 天＋未來兩週（分數、建議時段、潮、風、浪、雨、海溫、水色），下方附評分走勢、海水溫、預估水色三張曲線圖；檔名含匯出時間，方便跟之後的紀錄比較。</li>
         <li>預估下雨的日子：日雨量 ≥ 1 mm 或降雨機率 ≥ 60%，標 🌧；有雷雨標 ⛈。</li>
       </ul></div>`;
   }
@@ -1161,6 +1192,222 @@
     render();
   }));
   $('refreshBtn').addEventListener('click', refresh);
+
+  // ------------------------------------------------------------------ Excel export: index sheet + one sheet per checked spot with charts
+  const XLS_HEAD = ['日期', '類別', '距今(天)', '分數', '評等', '建議時段', '潮流', '大中小潮', '農曆', '滿乾潮', '可開船時段', '天氣',
+    '最高降雨機率(%)', '日雨量(mm)', '預估下雨', '白天平均風(m/s)', '平均風級', '最大風級', '主風向', '最大陣風(m/s)', '最大浪(m)',
+    '海水溫(°C)', '海溫一天最大降幅(°C)', '預估水色(測試中)', '水色指數', '氣溫最低(°C)', '氣溫最高(°C)', '潮汐來源'];
+  const XC = { date: 0, score: 3, sst: 21, water: 24 };   // column positions used by the charts
+
+  function xlsRow(m, d) {
+    const r1 = v => v == null || Number.isNaN(v) ? null : Math.round(v * 10) / 10;
+    const sc = d.score ?? d.dayScore;
+    return [
+      dlabel(d.date), d.di < 0 ? '過去' : d.di === 0 ? '今天' : '預報', d.di,
+      sc ?? null, sc == null ? '' : (d.score == null ? '今天時段已過（全天）' : d.rating.txt),
+      d.win ? d.win.label : '', d.win ? d.win.tideText : '', RANGE_TXT[d.info.range] || '', d.info.lunar || '',
+      d.events.map(e => (e.type === 'H' ? '滿' : '乾') + hm(e.t)).join(' '),
+      m.spot.boat ? rangesTxt(d.boatRanges).replace(/<br>/g, ' ') : '不限',
+      wxIcon(d.daily.code)[1], d.ppMax ?? null, r1(d.rainSum), d.isRain ? (d.thunder ? '雷雨' : '是') : '',
+      r1(d.windAvg), beaufort(d.windAvg) ?? null, d.windMaxB ?? null, d.domDir == null ? '' : dirName(d.domDir), r1(d.gustMax),
+      r1(d.waveMax), r1(d.sst), d.dsst != null && d.dsst < 0 ? r1(-d.dsst) : 0,
+      d.water ? d.water.txt : '', d.water ? d.water.t : null, r1(d.daily.tmin), r1(d.daily.tmax), d.tideSrc === 'cwa' ? '氣象署' : '模型推估'
+    ];
+  }
+
+  const xe = v => String(v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  const colName = i => (i >= 26 ? String.fromCharCode(64 + Math.floor(i / 26)) : '') + String.fromCharCode(65 + i % 26);
+  const XML = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n';
+  const NS_R = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
+
+  function xlsCell(ref, v, s) {
+    const st = s ? ` s="${s}"` : '';
+    if (v == null || v === '') return s ? `<c r="${ref}"${st}/>` : '';
+    if (typeof v === 'number') return `<c r="${ref}"${st}><v>${v}</v></c>`;
+    return `<c r="${ref}"${st} t="inlineStr"><is><t xml:space="preserve">${xe(v)}</t></is></c>`;
+  }
+
+  function xlsSheet(rows, opt) {
+    // opt: { styles: rowIndex -> style id, widths: [], freeze: 'B4', links: [{ref, sheet}], drawing: bool }
+    let x = XML + `<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="${NS_R}">`;
+    if (opt.freeze) {
+      const [, c, r] = opt.freeze.match(/([A-Z]+)(\d+)/);
+      x += `<sheetViews><sheetView workbookViewId="0"><pane xSplit="${c.charCodeAt(0) - 65}" ySplit="${+r - 1}" topLeftCell="${opt.freeze}" activePane="bottomRight" state="frozen"/></sheetView></sheetViews>`;
+    }
+    if (opt.widths) x += '<cols>' + opt.widths.map((w, i) => `<col min="${i + 1}" max="${i + 1}" width="${w}" customWidth="1"/>`).join('') + '</cols>';
+    x += '<sheetData>';
+    rows.forEach((row, ri) => {
+      const s = (opt.styles && opt.styles[ri]) || 0;
+      x += `<row r="${ri + 1}">` + row.map((v, ci) => xlsCell(colName(ci) + (ri + 1), v, s)).join('') + '</row>';
+    });
+    x += '</sheetData>';
+    if (opt.links && opt.links.length) x += '<hyperlinks>' + opt.links.map(l => `<hyperlink ref="${l.ref}" location="'${xe(l.sheet)}'!A1" display="${xe(l.sheet)}"/>`).join('') + '</hyperlinks>';
+    if (opt.drawing) x += '<drawing r:id="rId1"/>';
+    return x + '</worksheet>';
+  }
+
+  function xlsChart(title, sheet, cats, vals, col, color, axis) {
+    const n = cats.length, r0 = 4, r1 = r0 + n - 1, ref = c => `'${xe(sheet)}'!$${colName(c)}$${r0}:$${colName(c)}$${r1}`;
+    const strPts = cats.map((v, i) => `<c:pt idx="${i}"><c:v>${xe(v)}</c:v></c:pt>`).join('');
+    const numPts = vals.map((v, i) => v == null ? '' : `<c:pt idx="${i}"><c:v>${v}</c:v></c:pt>`).join('');
+    const scale = (axis.max != null ? `<c:max val="${axis.max}"/>` : '') + (axis.min != null ? `<c:min val="${axis.min}"/>` : '');
+    return XML + `<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="${NS_R}">` +
+      '<c:roundedCorners val="0"/><c:chart>' +
+      `<c:title><c:tx><c:rich><a:bodyPr/><a:p><a:pPr><a:defRPr sz="1300" b="1"/></a:pPr><a:r><a:rPr lang="zh-TW" sz="1300" b="1"/><a:t>${xe(title)}</a:t></a:r></a:p></c:rich></c:tx><c:overlay val="0"/></c:title>` +
+      '<c:autoTitleDeleted val="0"/><c:plotArea><c:layout/><c:lineChart><c:grouping val="standard"/><c:varyColors val="0"/>' +
+      `<c:ser><c:idx val="0"/><c:order val="0"/><c:tx><c:v>${xe(axis.name)}</c:v></c:tx>` +
+      `<c:spPr><a:ln w="28575" cap="rnd"><a:solidFill><a:srgbClr val="${color}"/></a:solidFill><a:round/></a:ln></c:spPr>` +
+      `<c:marker><c:symbol val="circle"/><c:size val="5"/><c:spPr><a:solidFill><a:srgbClr val="${color}"/></a:solidFill></c:spPr></c:marker>` +
+      `<c:cat><c:strRef><c:f>${ref(XC.date)}</c:f><c:strCache><c:ptCount val="${n}"/>${strPts}</c:strCache></c:strRef></c:cat>` +
+      `<c:val><c:numRef><c:f>${ref(col)}</c:f><c:numCache><c:formatCode>General</c:formatCode><c:ptCount val="${n}"/>${numPts}</c:numCache></c:numRef></c:val>` +
+      '<c:smooth val="0"/></c:ser><c:marker val="1"/><c:axId val="5001"/><c:axId val="5002"/></c:lineChart>' +
+      '<c:catAx><c:axId val="5001"/><c:scaling><c:orientation val="minMax"/></c:scaling><c:delete val="0"/><c:axPos val="b"/><c:numFmt formatCode="General" sourceLinked="0"/><c:tickLblPos val="low"/><c:crossAx val="5002"/><c:crosses val="autoZero"/><c:auto val="1"/><c:lblAlgn val="ctr"/><c:lblOffset val="100"/><c:noMultiLvlLbl val="0"/></c:catAx>' +
+      `<c:valAx><c:axId val="5002"/><c:scaling><c:orientation val="minMax"/>${scale}</c:scaling><c:delete val="0"/><c:axPos val="l"/><c:majorGridlines/><c:numFmt formatCode="General" sourceLinked="0"/><c:tickLblPos val="nextTo"/><c:crossAx val="5001"/><c:crosses val="autoZero"/><c:crossBetween val="between"/></c:valAx>` +
+      '</c:plotArea><c:legend><c:legendPos val="b"/><c:overlay val="0"/></c:legend><c:plotVisOnly val="1"/><c:dispBlanksAs val="gap"/></c:chart></c:chartSpace>';
+  }
+
+  function xlsDrawing(firstRow, count) {
+    let x = XML + `<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="${NS_R}" xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart">`;
+    for (let k = 0; k < count; k++) {
+      const r = firstRow + k * 20;
+      x += `<xdr:twoCellAnchor><xdr:from><xdr:col>0</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>${r}</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>` +
+        `<xdr:to><xdr:col>12</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>${r + 18}</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to>` +
+        `<xdr:graphicFrame macro=""><xdr:nvGraphicFramePr><xdr:cNvPr id="${k + 2}" name="Chart ${k + 1}"/><xdr:cNvGraphicFramePr/></xdr:nvGraphicFramePr>` +
+        '<xdr:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/></xdr:xfrm><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart">' +
+        `<c:chart r:id="rId${k + 1}"/></a:graphicData></a:graphic></xdr:graphicFrame><xdr:clientData/></xdr:twoCellAnchor>`;
+    }
+    return x + '</xdr:wsDr>';
+  }
+
+  const rels = list => XML + '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+    list.map((r, i) => `<Relationship Id="rId${i + 1}" Type="${NS_R}/${r[0]}" Target="${r[1]}"/>`).join('') + '</Relationships>';
+
+  // minimal ZIP writer (stored, no compression) - enough for an .xlsx package
+  const CRC_T = (() => { const t = new Uint32Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
+  const crc32 = b => { let c = 0xFFFFFFFF; for (let i = 0; i < b.length; i++) c = CRC_T[(c ^ b[i]) & 0xFF] ^ (c >>> 8); return (c ^ 0xFFFFFFFF) >>> 0; };
+  function zip(files) {
+    const enc = new TextEncoder(), parts = [], central = [];
+    let off = 0;
+    const u16 = v => [v & 0xFF, (v >>> 8) & 0xFF], u32 = v => [v & 0xFF, (v >>> 8) & 0xFF, (v >>> 16) & 0xFF, (v >>> 24) & 0xFF];
+    files.forEach(([name, text]) => {
+      const nm = enc.encode(name), data = enc.encode(text), crc = crc32(data);
+      const local = new Uint8Array([...u32(0x04034b50), ...u16(20), ...u16(0x0800), ...u16(0), ...u16(0), ...u16(0x21), ...u32(crc), ...u32(data.length), ...u32(data.length), ...u16(nm.length), ...u16(0)]);
+      parts.push(local, nm, data);
+      central.push(new Uint8Array([...u32(0x02014b50), ...u16(20), ...u16(20), ...u16(0x0800), ...u16(0), ...u16(0), ...u16(0x21), ...u32(crc), ...u32(data.length), ...u32(data.length), ...u16(nm.length), ...u16(0), ...u16(0), ...u16(0), ...u16(0), ...u32(0), ...u32(off)]), nm);
+      off += local.length + nm.length + data.length;
+    });
+    const cdSize = central.reduce((s, p) => s + p.length, 0);
+    const end = new Uint8Array([...u32(0x06054b50), ...u16(0), ...u16(0), ...u16(files.length), ...u16(files.length), ...u32(cdSize), ...u32(off), ...u16(0)]);
+    return new Blob([...parts, ...central, end], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+  }
+
+  function exportXlsx(keys) {
+    if (!state.model) return;
+    const stamp = new Date(nowL()).toISOString().slice(0, 16).replace('T', ' ');
+    const vis = state.model.filter(m => keys.includes(m.spot.key));
+    const files = [], sheets = [], ctOver = [];
+    const T = 'application/vnd.openxmlformats-officedocument';
+    let chartNo = 0;
+
+    // index sheet
+    const idx = [['出釣海象評估 匯出紀錄'], ['匯出時間', stamp], [], ['釣點（點名字跳到該頁）', '類型', '兩週內最佳日', '最佳分數', '建議時段', '今天海水溫(°C)', '今天預估水色']];
+    const links = [];
+    vis.forEach((m, i) => {
+      const bd = m.days.filter(x => x.score != null).sort((a, b) => b.score - a.score)[0];
+      const d0 = m.days[0];
+      idx.push([m.spot.name, kindOf(m.spot), bd ? dlabel(bd.date) : '', bd ? bd.score : null, bd && bd.win ? bd.win.label + ' ' + bd.win.tideText : '',
+        d0.sst == null ? null : Math.round(d0.sst * 10) / 10, d0.water ? d0.water.txt : '']);
+      links.push({ ref: 'A' + (5 + i), sheet: m.spot.name });
+    });
+    idx.push([], ['說明：每個釣點一頁，表格灰底為過去 3 天（用實際天氣重算），下方三張圖為評分走勢、海水溫、預估水色（測試中）。']);
+    sheets.push('目錄');
+    files.push(['xl/worksheets/sheet1.xml', xlsSheet(idx, { styles: { 0: 2, 3: 1 }, widths: [24, 12, 14, 10, 30, 14, 14], links })]);
+    ctOver.push(['/xl/worksheets/sheet1.xml', T + '.spreadsheetml.worksheet+xml']);
+
+    vis.forEach((m, i) => {
+      const sn = i + 2, name = m.spot.name, ds = allDays(m);
+      const data = ds.map(d => xlsRow(m, d));
+      const rows = [[`${name}（${kindOf(m.spot)}）　匯出 ${stamp}`], ['灰底＝過去 3 天（實際天氣重算）；水色為測試中估計，只供參考'], XLS_HEAD, ...data];
+      const styles = { 0: 2, 2: 1 };
+      ds.forEach((d, k) => { if (d.di < 0) styles[3 + k] = 3; });
+      const widths = XLS_HEAD.map((h, c) => [16, 7, 8, 7, 12, 13, 22, 9, 8, 26, 30, 10, 9, 9, 8, 9, 8, 8, 10, 10, 8, 9, 10, 10, 8, 9, 9, 10][c] || 10);
+      files.push([`xl/worksheets/sheet${sn}.xml`, xlsSheet(rows, { styles, widths, freeze: 'B4', drawing: true })]);
+      ctOver.push([`/xl/worksheets/sheet${sn}.xml`, T + '.spreadsheetml.worksheet+xml']);
+      sheets.push(name);
+
+      const cats = data.map(r => r[XC.date]), color = m.spot.color.replace('#', '').toUpperCase();
+      const ssts = data.map(r => r[XC.sst]).filter(v => v != null);
+      const charts = [
+        xlsChart(`${name}　評分走勢`, name, cats, data.map(r => r[XC.score]), XC.score, color, { name: '分數', min: 0, max: 100 }),
+        xlsChart(`${name}　海水溫度（°C）`, name, cats, data.map(r => r[XC.sst]), XC.sst, color,
+          { name: '海水溫', min: ssts.length ? Math.floor(Math.min(...ssts) - 1) : null, max: ssts.length ? Math.ceil(Math.max(...ssts) + 1) : null }),
+        xlsChart(`${name}　預估水色（測試中；0 很清 → 100 很濁）`, name, cats, data.map(r => r[XC.water]), XC.water, color, { name: '水色指數', min: 0, max: 100 })
+      ];
+      const chartRels = [];
+      charts.forEach(c => {
+        chartNo++;
+        files.push([`xl/charts/chart${chartNo}.xml`, c]);
+        ctOver.push([`/xl/charts/chart${chartNo}.xml`, T + '.drawingml.chart+xml']);
+        chartRels.push(['chart', `../charts/chart${chartNo}.xml`]);
+      });
+      files.push([`xl/drawings/drawing${i + 1}.xml`, xlsDrawing(rows.length + 1, charts.length)]);
+      files.push([`xl/drawings/_rels/drawing${i + 1}.xml.rels`, rels(chartRels)]);
+      ctOver.push([`/xl/drawings/drawing${i + 1}.xml`, T + '.drawing+xml']);
+      files.push([`xl/worksheets/_rels/sheet${sn}.xml.rels`, rels([['drawing', `../drawings/drawing${i + 1}.xml`]])]);
+    });
+
+    const styles = XML + '<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">' +
+      '<fonts count="3"><font><sz val="11"/><name val="Microsoft JhengHei"/></font><font><b/><sz val="11"/><name val="Microsoft JhengHei"/></font><font><b/><sz val="14"/><color rgb="FF0B4A6E"/><name val="Microsoft JhengHei"/></font></fonts>' +
+      '<fills count="4"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill>' +
+      '<fill><patternFill patternType="solid"><fgColor rgb="FFDCEBF5"/><bgColor indexed="64"/></patternFill></fill>' +
+      '<fill><patternFill patternType="solid"><fgColor rgb="FFE5E7EB"/><bgColor indexed="64"/></patternFill></fill></fills>' +
+      '<borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>' +
+      '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>' +
+      '<cellXfs count="4"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>' +
+      '<xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1"/>' +
+      '<xf numFmtId="0" fontId="2" fillId="0" borderId="0" xfId="0" applyFont="1"/>' +
+      '<xf numFmtId="0" fontId="0" fillId="3" borderId="0" xfId="0" applyFill="1"/></cellXfs>' +
+      '<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>';
+    files.push(['xl/styles.xml', styles]);
+    files.push(['xl/workbook.xml', XML + `<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="${NS_R}"><sheets>` +
+      sheets.map((s, i) => `<sheet name="${xe(s)}" sheetId="${i + 1}" r:id="rId${i + 1}"/>`).join('') + '</sheets></workbook>']);
+    files.push(['xl/_rels/workbook.xml.rels', rels([...sheets.map((s, i) => ['worksheet', `worksheets/sheet${i + 1}.xml`]), ['styles', 'styles.xml']])]);
+    files.push(['_rels/.rels', rels([['officeDocument', 'xl/workbook.xml']])]);
+    files.unshift(['[Content_Types].xml', XML + '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">' +
+      '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/>' +
+      `<Override PartName="/xl/workbook.xml" ContentType="${T}.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/styles.xml" ContentType="${T}.spreadsheetml.styles+xml"/>` +
+      ctOver.map(([p, c]) => `<Override PartName="${p}" ContentType="${c}"/>`).join('') + '</Types>']);
+
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(zip(files));
+    a.download = `出釣海象紀錄_${stamp.replace(' ', '_').replace(':', '')}.xlsx`;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+  }
+  // export dialog: tick the spots to include, then export
+  function openExport() {
+    if (!state.model) return;
+    const dlg = $('exportDlg'), list = $('exportList');
+    let sel = state.settings.spots.slice();
+    const draw = () => {
+      list.innerHTML = SPOTS.map(s => `<button type="button" role="checkbox" aria-checked="${sel.includes(s.key)}" class="pick${sel.includes(s.key) ? ' on' : ''}" style="--c:${s.color}" data-k="${s.key}"><span class="box"></span>${s.name}${s.shore ? '<small>岸</small>' : ''}</button>`).join('');
+      list.querySelectorAll('[data-k]').forEach(b => b.addEventListener('click', () => {
+        const k = b.dataset.k;
+        sel = SPOTS.map(s => s.key).filter(x => x === k ? !sel.includes(x) : sel.includes(x));
+        draw();
+      }));
+      $('exportGo').disabled = !sel.length;
+      $('exportGo').textContent = sel.length ? `匯出 ${sel.length} 個釣點` : '請至少勾一個';
+    };
+    $('exportAll').onclick = () => { sel = SPOTS.map(s => s.key); draw(); };
+    $('exportCancel').onclick = () => { dlg.hidden = true; };
+    $('exportGo').onclick = () => { if (!sel.length) return; dlg.hidden = true; exportXlsx(sel); };
+    dlg.onclick = e => { if (e.target === dlg) dlg.hidden = true; };
+    draw();
+    dlg.hidden = false;
+  }
+  document.querySelectorAll('[data-export]').forEach(b => b.addEventListener('click', openExport));
 
   function renderPick() {
     const on = state.settings.spots;

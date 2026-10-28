@@ -9,7 +9,7 @@
   <meta name="apple-mobile-web-app-title" content="出釣海象">
   <meta name="theme-color" content="#0b4a6e">
   <link rel="manifest" href="manifest.json">
-  <link rel="stylesheet" href="assets/style.css?v=1.6">
+  <link rel="stylesheet" href="assets/style.css?v=1.7">
 </head>
 <body>
   <header class="top">
@@ -25,7 +25,10 @@
         <button type="button" data-mode="simple">簡易模式</button>
         <button type="button" data-mode="full">完整模式</button>
       </div>
-      <button type="button" class="btn refresh" id="refreshBtn">更新資料</button>
+      <div class="act-right">
+        <button type="button" class="btn export" data-export title="匯出 Excel 檔：第一頁目錄，每個勾選的釣點一頁（過去 3 天＋未來兩週），下方附評分、海水溫、水色曲線圖；檔名含匯出時間">⬇ 匯出紀錄</button>
+        <button type="button" class="btn refresh" id="refreshBtn">更新資料</button>
+      </div>
     </div>
     <div class="ver" id="verInfo"></div>
   </header>
@@ -41,7 +44,7 @@
           <div class="legend" id="curveLegend"></div>
         </div>
         <div id="curve" class="curve"></div>
-        <p class="hint">點曲線上的點可看那天的詳細資料。🌧＝預估下雨　⛈＝可能雷雨</p>
+        <p class="hint">點曲線上的點可看那天的詳細資料。灰底＝過去 3 天（用實際天氣重算，看趨勢用）。🌧＝預估下雨　⛈＝可能雷雨</p>
       </section>
       <section class="panel">
         <div class="panel-head">
@@ -58,8 +61,7 @@
         </div>
         <div id="waterCurve" class="curve"></div>
         <p class="hint">由前兩天風浪、大中小潮、上游河川雨量推估，只供參考、不算分。越往上越濁；黑鯛通常最愛「微濁」。點線上的點可看當天說明。</p>
-      </section>
-    </section>
+      </section>    </section>
 
     <section id="fullView" class="view">
       <section class="panel">
@@ -69,8 +71,7 @@
 
       <section class="panel">
         <div class="panel-head">
-          <h2>兩週總覽（分數越高越適合出釣）</h2>
-        </div>
+          <h2>兩週總覽（分數越高越適合出釣）</h2>        </div>
         <div id="heatmap" class="heatmap-wrap"></div>
       </section>
 
@@ -98,11 +99,25 @@
     </section>
   </main>
 
+  <div class="dlg-mask" id="exportDlg" hidden>
+    <div class="dlg" role="dialog" aria-modal="true" aria-labelledby="exportTitle">
+      <h2 id="exportTitle">匯出紀錄（Excel）</h2>
+      <p class="hint">勾選要匯出的釣點：第一頁是目錄，每個釣點一頁，附評分、海水溫、水色曲線圖。</p>
+      <div class="dlg-list" id="exportList"></div>
+      <div class="dlg-btns">
+        <button type="button" class="btn ghost" id="exportAll">全選</button>
+        <span class="sp"></span>
+        <button type="button" class="btn ghost" id="exportCancel">取消</button>
+        <button type="button" class="btn go" id="exportGo">匯出</button>
+      </div>
+    </div>
+  </div>
+
   <footer class="foot">
     潮汐：中央氣象署 30 天潮汐預報｜天氣、浪、海水溫：Open-Meteo｜分數為參考，出船前請再確認海巡與氣象署最新公告
   </footer>
 
   <script src="data/tide-data.js"></script>
-  <script src="assets/app.js?v=1.6"></script>
+  <script src="assets/app.js?v=1.7"></script>
 </body>
 </html>

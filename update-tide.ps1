@@ -33,6 +33,18 @@ function Get-IntCell([string]$row, [string]$header) {
   return $null
 }
 
+# the CWA page starts from today, so carry over the last few days from the previous file for the trend curves
+$dataFile = Join-Path (Join-Path $root 'data') 'tide-data.js'
+$keepFrom = $taipeiNow.AddDays(-7).ToString('yyyy-MM-dd')
+$prev = $null
+if (Test-Path $dataFile) {
+  try {
+    $txt = [IO.File]::ReadAllText($dataFile)
+    $a = $txt.IndexOf('{'); $z = $txt.LastIndexOf('}')
+    if ($a -ge 0 -and $z -gt $a) { $prev = $txt.Substring($a, $z - $a + 1) | ConvertFrom-Json }
+  } catch { $prev = $null }
+}
+
 $out = [ordered]@{}
 foreach ($key in $stations.Keys) {
   $id = $stations[$key]
@@ -65,6 +77,17 @@ foreach ($key in $stations.Keys) {
     $cur.events.Add([ordered]@{ type = $type; time = $time; msl = (Get-IntCell $row 'Above_Local_MSL'); chart = (Get-IntCell $row 'Above_Chart_Datum') })
   }
   if ($days.Count -lt 5) { throw "Tide page $id returned only $($days.Count) days; the CWA page layout may have changed." }
+  if ($prev -and $prev.spots -and $prev.spots.$key) {
+    $firstNew = $days[0].date
+    $old = @($prev.spots.$key.days | Where-Object { [string]::CompareOrdinal($_.date, $firstNew) -lt 0 -and [string]::CompareOrdinal($_.date, $keepFrom) -ge 0 })
+    if ($old.Count) {
+      $merged = New-Object System.Collections.Generic.List[object]
+      foreach ($d in $old) { $merged.Add($d) }
+      foreach ($d in $days) { $merged.Add($d) }
+      $days = $merged
+      Write-Host "  kept $($old.Count) past day(s)"
+    }
+  }
   Write-Host ("  {0} days, {1} .. {2}" -f $days.Count, $days[0].date, $days[$days.Count - 1].date)
   $out[$key] = [ordered]@{ station = $id; days = $days }
 }
