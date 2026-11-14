@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  const VERSION = 'v1.8', VERSION_DATE = '2026-11-14';   // bump on every upload, together with ?v= in index.html
+  const VERSION = 'v1.9', VERSION_DATE = '2026-11-14';   // bump on every upload, together with ?v= in index.html
   const REMOTE_TIDE = 'https://tomicahuang.github.io/fishing-weather/data/tide-data.js';
   const COUNTER_URL = 'https://abacus.jasoncameron.dev';
   const COUNTER_KEY = 'tomicahuang-fishing-weather/views';
@@ -1057,6 +1057,51 @@
     return s + '</svg>';
   }
 
+  // hourly wind (bars coloured by Beaufort level, gust ticks, direction arrows) and wave height (line, right axis)
+  function windWaveSvg(m, d) {
+    const nar = isNarrow();
+    const W = nar ? 480 : 1000, HH = nar ? 250 : 270, l = nar ? 34 : 50, r = nar ? 34 : 46, t = 34, b = 30;
+    const pw = W - l - r, ph = HH - t - b, t0 = parseL(d.date);
+    const hs = d.hours;
+    const wsMax = Math.max(8, ...nn(hs.map(x => x.wg)), ...nn(hs.map(x => x.ws)));
+    const wTop = Math.ceil((wsMax + 1) / 2) * 2;
+    const waves = nn(hs.map(x => x.wave));
+    const vTop = Math.max(1, Math.ceil((waves.length ? Math.max(...waves) : 0) * 2 + 0.5) / 2);
+    const X = tt => l + (tt - t0) / D * pw, Yw = v => t + (wTop - v) / wTop * ph, Yv = v => t + (vTop - v) / vTop * ph;
+    const bw = pw / 24;
+    let s = `<svg viewBox="0 0 ${W} ${HH}" xmlns="http://www.w3.org/2000/svg" font-size="${nar ? 11 : 12.5}" font-family="inherit">`;
+    s += `<rect x="${l}" y="${t}" width="${X(d.sun.rise) - l}" height="${ph}" fill="#1e293b" opacity=".07"/>`;
+    s += `<rect x="${X(d.sun.set)}" y="${t}" width="${l + pw - X(d.sun.set)}" height="${ph}" fill="#1e293b" opacity=".07"/>`;
+    if (d.win) s += `<rect x="${X(t0 + d.win.st * H)}" y="${t}" width="${d.win.len * bw}" height="${ph}" fill="#facc15" opacity=".3"/>`;
+    // Beaufort level lines on the wind axis
+    [[3.4, '3級'], [5.5, '4級'], [8.0, '5級'], [10.8, '6級'], [13.9, '7級']].forEach(([v, txt]) => {
+      if (v >= wTop) return;
+      s += `<line x1="${l}" x2="${l + pw}" y1="${Yw(v)}" y2="${Yw(v)}" stroke="#94a3b8" stroke-dasharray="3 4" opacity=".7"/>`;
+      s += `<text x="${l - 4}" y="${Yw(v) + 4}" text-anchor="end" fill="#64748b">${txt}</text>`;
+    });
+    s += `<text x="${l - 4}" y="${Yw(0) + 4}" text-anchor="end" fill="#64748b">0</text>`;
+    for (let v = 0.5; v <= vTop + 1e-9; v += 0.5) s += `<text x="${l + pw + 4}" y="${Yv(v) + 4}" fill="#0284c7">${v}m</text>`;
+    hs.forEach(x => {
+      if (x.ws == null) return;
+      const lv = beaufort(x.ws), c = lv <= 3 ? '#22c55e' : lv === 4 ? '#eab308' : lv === 5 ? '#f97316' : '#ef4444';
+      const x0 = X(t0 + x.hour * H) + bw * 0.15;
+      s += `<rect x="${x0.toFixed(1)}" y="${Yw(x.ws).toFixed(1)}" width="${(bw * 0.7).toFixed(1)}" height="${(Yw(0) - Yw(x.ws)).toFixed(1)}" rx="2" fill="${c}" opacity=".8"><title>${pad(x.hour)}:00 ${dirName(x.wd)} ${lv} 級（${fmt1(x.ws)} m/s，陣風 ${fmt1(x.wg)}）</title></rect>`;
+      if (x.wg != null) s += `<line x1="${x0.toFixed(1)}" x2="${(x0 + bw * 0.7).toFixed(1)}" y1="${Yw(x.wg).toFixed(1)}" y2="${Yw(x.wg).toFixed(1)}" stroke="#334155" stroke-width="2"/>`;
+    });
+    const wpts = hs.filter(x => x.wave != null).map(x => `${(X(t0 + (x.hour + 0.5) * H)).toFixed(1)},${Yv(x.wave).toFixed(1)}`);
+    if (wpts.length > 1) s += `<polyline points="${wpts.join(' ')}" fill="none" stroke="#0284c7" stroke-width="2.6" stroke-linejoin="round"/>`;
+    else s += `<text x="${l + pw - 4}" y="${t + 14}" text-anchor="end" fill="#64748b">這天超出浪的預報範圍</text>`;
+    for (let h = 1; h < 24; h += 2) {
+      const x = hs[h];
+      if (!x || x.wd == null) continue;
+      const cx = X(t0 + (h + 0.5) * H).toFixed(1);
+      s += `<g transform="translate(${cx},${t - 14}) rotate(${Math.round(x.wd)})"><path d="M0,-7 L0,7 M-4,3 L0,7 L4,3" stroke="#334155" stroke-width="1.8" fill="none" stroke-linecap="round"/></g>`;
+    }
+    for (let q = 0; q <= 24; q += 3) s += `<text x="${X(t0 + q * H)}" y="${HH - b + 16}" text-anchor="middle" fill="#64748b">${pad(q)}</text>`;
+    if (d.di === 0) { const nx = X(nowL()); s += `<line x1="${nx}" x2="${nx}" y1="${t}" y2="${t + ph}" stroke="#0f172a" stroke-width="1.5"/>`; }
+    return s + '</svg>';
+  }
+
   function renderDetail() {
     const m = state.model.find(x => x.spot.key === state.sel.spot);
     const d = allDays(m).find(x => x.date === state.sel.date) || m.days[0];
@@ -1090,6 +1135,8 @@
       <h3>潮汐曲線（${sp.tide}${d.tideSrc === 'model' ? '，模型推估' : '，中央氣象署'}）　<small style="font-weight:400;color:#64748b"><span style="color:#15803d">綠線＝漲潮</span>　<span style="color:#c2410c">橘線＝退潮</span>　黃底＝建議時段　灰底＝夜間　單位 cm（相對平均海平面）</small></h3>
       <div class="tidechart">${tideSvg(m, d)}</div>
       ${boat}
+      <h3>逐時風浪　<small style="font-weight:400;color:#64748b">柱＝風力（<span style="color:#16a34a">3 級以下</span>／<span style="color:#ca8a04">4 級</span>／<span style="color:#ea580c">5 級</span>／<span style="color:#dc2626">6 級以上</span>），橫線＝陣風，上方箭頭＝風往哪吹，<span style="color:#0284c7">藍線＝浪高（右邊刻度）</span></small></h3>
+      <div class="tidechart">${windWaveSvg(m, d)}</div>
       <div class="detail-grid">
         <div>
           <h3>${sp.fish}出釣建議</h3>
@@ -1464,6 +1511,20 @@
   }
   renderVer(null);
   loadViews();
+
+  function applyTheme(t) {
+    document.documentElement.dataset.theme = t;
+    $('themeBtn').textContent = t === 'dark' ? '☀️ 白底' : '🌙 黑底';
+    $('themeBtn').title = t === 'dark' ? '切換成白底' : '切換成黑底';
+    const meta = document.querySelector('meta[name="theme-color"]');
+    if (meta) meta.content = t === 'dark' ? '#072a40' : '#0b4a6e';
+  }
+  applyTheme(document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light');
+  $('themeBtn').addEventListener('click', () => {
+    const t = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+    try { localStorage.setItem('fw-theme', t); } catch (e) { }
+    applyTheme(t);
+  });
 
   let wasNarrow = isNarrow();
   window.addEventListener('resize', () => {

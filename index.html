@@ -8,8 +8,9 @@
   <link rel="apple-touch-icon" href="assets/icons/apple-touch-icon.png">
   <meta name="apple-mobile-web-app-title" content="出釣海象">
   <meta name="theme-color" content="#0b4a6e">
+  <script>try { document.documentElement.dataset.theme = localStorage.getItem('fw-theme') || 'light'; } catch (e) { }</script>
   <link rel="manifest" href="manifest.json">
-  <link rel="stylesheet" href="assets/style.css?v=1.8">
+  <link rel="stylesheet" href="assets/style.css?v=1.9">
 </head>
 <body>
   <header class="top">
@@ -30,7 +31,7 @@
         <button type="button" class="btn refresh" id="refreshBtn">更新資料</button>
       </div>
     </div>
-    <div class="ver" id="verInfo"></div>
+    <div class="ver"><button type="button" class="theme-btn" id="themeBtn"></button><span id="verInfo"></span></div>
   </header>
   <nav class="spot-pick" id="spotPick" aria-label="選擇要看的釣點"></nav>
   <div class="status" id="status"></div>
@@ -118,6 +119,6 @@
   </footer>
 
   <script src="data/tide-data.js"></script>
-  <script src="assets/app.js?v=1.8"></script>
+  <script src="assets/app.js?v=1.9"></script>
 </body>
 </html>

@@ -34,7 +34,10 @@ button { font: inherit; cursor: pointer; }
   color: #fff;
 }
 .brand { display: flex; gap: 12px; align-items: center; }
-.ver { position: absolute; top: 5px; right: 14px; font-size: 11px; letter-spacing: .3px; opacity: .78; white-space: nowrap; }
+.ver { position: absolute; top: 3px; right: 14px; display: flex; align-items: center; gap: 8px; font-size: 11px; letter-spacing: .3px; white-space: nowrap; }
+.ver #verInfo { opacity: .78; }
+.theme-btn { border: 1px solid rgba(255, 255, 255, .55); background: rgba(255, 255, 255, .12); color: #fff; border-radius: 999px; padding: 0 8px; font-size: 11px; line-height: 17px; cursor: pointer; }
+.theme-btn:hover { background: rgba(255, 255, 255, .25); }
 .logo { width: 46px; height: 46px; border-radius: 12px; box-shadow: 0 2px 6px rgba(0,0,0,.25); }
 h1 { margin: 0; font-size: 22px; letter-spacing: 1px; }
 .sub { margin: 2px 0 0; font-size: 13px; opacity: .9; }
@@ -287,3 +290,70 @@ table.hours tr.dark td.t { color: #6366f1; }
   .detail-head h2 { font-size: 17px; }
   .refs { grid-template-columns: 1fr; }
 }
+
+/* ---------- dark background (toggle in the header) ---------- */
+[data-theme="dark"] {
+  --bg: #0d1520; --panel: #16212d; --ink: #e2e8f0; --muted: #94a3b8; --line: #2a3a4b; --sea: #5bb8ea; --sea2: #3aa5dc;
+  color-scheme: dark;
+}
+[data-theme="dark"] .top { background: linear-gradient(120deg, #062638, #0c4a6c); }
+[data-theme="dark"] .status { background: #111c28; }
+[data-theme="dark"] .status .err { color: #f87171; }
+[data-theme="dark"] .spot-pick, [data-theme="dark"] .pick { background: var(--panel); }
+[data-theme="dark"] .pick.on { background: var(--c); }
+[data-theme="dark"] .panel, [data-theme="dark"] .best-card { box-shadow: 0 1px 3px rgba(0, 0, 0, .5); }
+[data-theme="dark"] .best-card { background: var(--panel); }
+[data-theme="dark"] .best-card.c4 { background: #12301f; }
+[data-theme="dark"] .best-card.c3 { background: #2d2a10; }
+[data-theme="dark"] .best-card.c2 { background: #33200f; }
+[data-theme="dark"] .best-card.c1 { background: #361515; }
+[data-theme="dark"] .best-card.none { background: #1c2733; }
+[data-theme="dark"] .best-card .score, [data-theme="dark"] .best-card .others span { background: rgba(255, 255, 255, .08); }
+[data-theme="dark"] .best-card .tip { color: #cbd5e1; }
+[data-theme="dark"] .best-card.c4 .score, [data-theme="dark"] .c4 .num, [data-theme="dark"] .scale .c4 { color: #6ee7a0; }
+[data-theme="dark"] .best-card.c3 .score, [data-theme="dark"] .c3 .num, [data-theme="dark"] .scale .c3 { color: #e8d66b; }
+[data-theme="dark"] .best-card.c2 .score, [data-theme="dark"] .c2 .num, [data-theme="dark"] .scale .c2 { color: #f4a66c; }
+[data-theme="dark"] .best-card.c1 .score, [data-theme="dark"] .c1 .num, [data-theme="dark"] .scale .c1 { color: #f49b9b; }
+[data-theme="dark"] .c4, [data-theme="dark"] .r4 { background: #153a25; }
+[data-theme="dark"] .c3, [data-theme="dark"] .r3 { background: #3a3512; }
+[data-theme="dark"] .c2, [data-theme="dark"] .r2 { background: #3f2a17; }
+[data-theme="dark"] .c1, [data-theme="dark"] .r1 { background: #431c1c; }
+[data-theme="dark"] .c0, [data-theme="dark"] .r0 { background: #1f2a36; }
+[data-theme="dark"] .r4 { color: #6ee7a0; } [data-theme="dark"] .r3 { color: #e8d66b; } [data-theme="dark"] .r2 { color: #f4a66c; } [data-theme="dark"] .r1 { color: #f49b9b; }
+[data-theme="dark"] .heatmap th b, [data-theme="dark"] .heatmap th.spot, [data-theme="dark"] .heatmap.tall th.spot-h,
+[data-theme="dark"] .heatmap .lbl, [data-theme="dark"] .dc-score .lbl, [data-theme="dark"] .dc-row,
+[data-theme="dark"] .settings .explain, [data-theme="dark"] .scale span { color: #cbd5e1; }
+[data-theme="dark"] .heatmap .meta { color: #94a3b8; }
+[data-theme="dark"] .heatmap td.we { border-color: #64748b; }
+[data-theme="dark"] .heatmap td.sel, [data-theme="dark"] .dcard.sel { box-shadow: 0 0 0 2.5px #e2e8f0; }
+[data-theme="dark"] .heatmap .rain { background: #1e3a8a; color: #bfdbfe; }
+[data-theme="dark"] .heatmap .rain.wet { background: #2563eb; color: #fff; }
+[data-theme="dark"] .sst { background: rgba(0, 0, 0, .35); }
+[data-theme="dark"] .sst.best { color: #4ade80; } [data-theme="dark"] .sst.ok { color: #a3e635; } [data-theme="dark"] .sst.cool { color: #38bdf8; }
+[data-theme="dark"] .sst.cold { color: #bfdbfe; background: #1e3a8a; } [data-theme="dark"] .sst.hot { color: #fb923c; }
+[data-theme="dark"] .spot-tabs button { background: #1f2a36; color: var(--ink); }
+[data-theme="dark"] .spot-tabs button.on { background: var(--sea); color: #06202f; }
+[data-theme="dark"] table.days th, [data-theme="dark"] table.hours th { background: #1f2a36; color: #cbd5e1; }
+[data-theme="dark"] table.days tbody tr:hover { background: #1c2b3a; }
+[data-theme="dark"] table.days tr.sel { background: #1e3a52; }
+[data-theme="dark"] table.days tr.rainy td.wx { background: #1e2c4a; }
+[data-theme="dark"] table.hours tr.best { background: #3a3512; }
+[data-theme="dark"] table.hours tr.dry td { color: #64748b; }
+[data-theme="dark"] table.hours td.rise, [data-theme="dark"] .now-card .rise, [data-theme="dark"] .reasons .pos { color: #4ade80; }
+[data-theme="dark"] table.hours td.fall, [data-theme="dark"] .now-card .fall { color: #fbbf24; }
+[data-theme="dark"] .reasons .neg { color: #f87171; }
+[data-theme="dark"] .tH { color: #7cc4ee; } [data-theme="dark"] .tL { color: #e9b45a; }
+[data-theme="dark"] .tag { background: #2a3a4b; color: #cbd5e1; }
+[data-theme="dark"] .tag.warn { background: #4a1d1d; color: #fca5a5; }
+[data-theme="dark"] .tag.good { background: #14361f; color: #86efac; }
+[data-theme="dark"] .range-big { color: #f87171; } [data-theme="dark"] .range-mid { color: #2dd4bf; } [data-theme="dark"] .range-small { color: #94a3b8; }
+[data-theme="dark"] .advice { background: #102a3a; }
+[data-theme="dark"] .boatwin { background: #0f2e24; }
+[data-theme="dark"] .boatwin.no { background: #3a1616; }
+[data-theme="dark"] .kind { background: #243241; color: #cbd5e1; }
+[data-theme="dark"] .testing { background: #3a2f10; color: #fcd34d; }
+[data-theme="dark"] .back-btn, [data-theme="dark"] .btn.ghost { background: #1f2a36; color: #7cc4ee; }
+[data-theme="dark"] .dlg { background: var(--panel); }
+[data-theme="dark"] .bar { background: #2a3a4b; }
+/* charts are drawn for a light page; invert their lightness but keep the hues */
+[data-theme="dark"] .curve svg, [data-theme="dark"] .tidechart svg { filter: invert(.9) hue-rotate(180deg) saturate(1.2); }
