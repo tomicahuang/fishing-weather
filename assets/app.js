@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  const VERSION = 'v1.7', VERSION_DATE = '2026-10-28';   // bump on every upload, together with ?v= in index.html
+  const VERSION = 'v1.8', VERSION_DATE = '2026-11-14';   // bump on every upload, together with ?v= in index.html
   const REMOTE_TIDE = 'https://tomicahuang.github.io/fishing-weather/data/tide-data.js';
   const COUNTER_URL = 'https://abacus.jasoncameron.dev';
   const COUNTER_KEY = 'tomicahuang-fishing-weather/views';
@@ -56,6 +56,7 @@
     model: null,
     best: null,
     sel: { spot: 'bx', date: null },
+    loading: true,
     error: ''
   };
 
@@ -150,6 +151,12 @@
     return r.json();
   }
   const asArr = x => Array.isArray(x) ? x : [x];
+  async function getJsonRetry(url, tries = 3) {
+    for (let i = 1; ; i++) {
+      try { return await getJson(url); }
+      catch (e) { if (i >= tries) throw e; await new Promise(r => setTimeout(r, 1500 * i)); }
+    }
+  }
 
   async function fetchWeather() {
     const lat = SPOTS.map(s => s.lat).join(','), lon = SPOTS.map(s => s.lon).join(',');
@@ -162,7 +169,7 @@
       '&hourly=wave_height,wave_direction,wave_period,sea_surface_temperature,sea_level_height_msl';
     const bsUrl = 'https://api.open-meteo.com/v1/forecast?latitude=' + BASINS.map(b => b.lat).join(',') + '&longitude=' + BASINS.map(b => b.lon).join(',') +
       `&timezone=Asia%2FTaipei&past_days=${PAST + 3}&forecast_days=16&daily=precipitation_sum`;
-    const [fc, mr, bs] = await Promise.all([getJson(fcUrl), getJson(mrUrl).catch(() => null), getJson(bsUrl).catch(() => null)]);
+    const [fc, mr, bs] = await Promise.all([getJsonRetry(fcUrl), getJsonRetry(mrUrl).catch(() => null), getJsonRetry(bsUrl).catch(() => null)]);
     let basin = null;
     if (bs) {
       basin = {};
@@ -172,7 +179,15 @@
         basin[BASINS[i].key] = m;
       });
     }
-    return { fetched: Date.now(), fc: asArr(fc), mr: mr ? asArr(mr) : null, basin };
+    const wx = { fetched: Date.now(), fc: asArr(fc), mr: mr ? asArr(mr) : null, mrFetched: mr ? Date.now() : null, basin };
+    // the marine service fails now and then; keep the last good waves / sea temperature (up to 3 days old) instead of blanking them
+    const old = state.wx;
+    if (!wx.mr && old && old.mr) {
+      const at = old.mrFetched || old.fetched;
+      if (Date.now() - at < 3 * D) { wx.mr = old.mr; wx.mrFetched = at; wx.mrStale = true; }
+    }
+    if (!wx.basin && old && old.basin) wx.basin = old.basin;
+    return wx;
   }
 
   function loadScript(src) {
@@ -622,7 +637,11 @@
     if (state.wx) {
       const f = new Date(state.wx.fetched + 8 * H);
       parts.push(`天氣、浪、海水溫：Open-Meteo（${f.getUTCMonth() + 1}/${f.getUTCDate()} ${hm(f.getTime())} 抓取）`);
-      if (!state.wx.mr) parts.push('<span class="err">浪與海水溫暫時抓不到</span>');
+      if (!state.wx.mr) parts.push('<span class="err">浪與海水溫暫時抓不到，等一下再按「更新資料」</span>');
+      else if (state.wx.mrStale) {
+        const m = new Date(state.wx.mrFetched + 8 * H);
+        parts.push(`<span class="err">浪與海水溫這次沒抓到，先用 ${m.getUTCMonth() + 1}/${m.getUTCDate()} ${hm(m.getTime())} 的資料</span>`);
+      }
     }
     if (state.nextAuto) parts.push(`每天 00、06、12、18 點自動更新（下次 ${hm(state.nextAuto)}）`);
     if (state.error) parts.push(`<span class="err">${state.error}</span>`);
@@ -695,7 +714,7 @@
     const W = nar ? 400 : 1000, HH = nar ? 250 : 290, l = nar ? 34 : 46, r = nar ? 6 : 14, t = 14, b = 46;
     const pw = W - l - r, ph = HH - t - b, n = N_ALL;
     const vis = shown(), days0 = allDays(vis[0]);
-    if (!vis.some(m => m.days.some(d => d.water))) return '<p class="hint">暫時算不出水色，按「更新資料」再試一次。</p>';
+    if (!vis.some(m => m.days.some(d => d.water))) return `<p class="hint">${state.loading ? '水色資料載入中…' : '暫時算不出水色，按「更新資料」再試一次。'}</p>`;
     const X = i => l + (i + 0.5) * pw / n, Y = v => t + (100 - v) / 100 * ph;
     const tint = { w1: '#e0f2fe', w2: '#ccfbf1', w3: '#ecf3d6', w4: '#f3e6d3', w5: '#e9dccb' };
     let s = `<svg viewBox="0 0 ${W} ${HH}" xmlns="http://www.w3.org/2000/svg" font-size="${nar ? 11 : 13}" font-family="inherit">`;
@@ -745,7 +764,7 @@
     const pw = W - l - r, ph = HH - t - b, n = N_ALL;
     const vis = shown(), days0 = allDays(vis[0]);
     const vals = vis.flatMap(m => allDays(m).map(d => d.sst)).filter(v => v != null);
-    if (!vals.length) return '<p class="hint">暫時抓不到海水溫資料，按「更新資料」再試一次。</p>';
+    if (!vals.length) return `<p class="hint">${state.loading ? '海水溫資料載入中…' : '暫時抓不到海水溫資料，按「更新資料」再試一次。'}</p>`;
     let lo = Math.floor(Math.min(...vals) - 0.5), hi = Math.ceil(Math.max(...vals) + 0.5);
     if (hi - lo < 4) { const mid = (hi + lo) / 2; lo = Math.floor(mid - 2); hi = lo + 4; }
     const X = i => l + (i + 0.5) * pw / n, Y = v => t + (hi - v) / (hi - lo) * ph;
@@ -1157,6 +1176,7 @@
     } catch (e) {
       state.error = '天氣資料抓取失敗（' + (e.message || e) + '），' + (state.wx ? '先顯示上次的資料' : '請檢查網路後再按「更新資料」');
     }
+    state.loading = false;
     rebuild();
     scheduleAuto();
     render();
