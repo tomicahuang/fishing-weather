@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  const VERSION = 'v1.9', VERSION_DATE = '2026-11-14';   // bump on every upload, together with ?v= in index.html
+  const VERSION = 'v1.12', VERSION_DATE = '2026-11-28';   // bump on every upload, together with ?v= in index.html
   const REMOTE_TIDE = 'https://tomicahuang.github.io/fishing-weather/data/tide-data.js';
   const COUNTER_URL = 'https://abacus.jasoncameron.dev';
   const COUNTER_KEY = 'tomicahuang-fishing-weather/views';
@@ -12,6 +12,16 @@
   const WIN = 3;          // hours in a recommended window
   const BASE = 66;
   const H = 3600e3, D = 86400e3;
+  // 黑鯛洄游期（秋冬 10–3 月）加重海水溫；其餘月份風浪為主。岸釣／非黑鯛一律 1。
+  const SEASON_MIGRATE = { wind: 0.9, wave: 0.9, sst: 1.5 };   // Oct–Mar
+  const SEASON_OTHER   = { wind: 1.4, wave: 1.4, sst: 0.5 };   // Apr–Sep
+  function seasonWeights(month, bream) {
+    if (!bream) return { wind: 1, wave: 1, sst: 1, migrate: false };
+    const migrate = month >= 10 || month <= 3;
+    const w = migrate ? SEASON_MIGRATE : SEASON_OTHER;
+    return { wind: w.wind, wave: w.wave, sst: w.sst, migrate };
+  }
+  function monthOf(t) { return new Date(t).getUTCMonth() + 1; }
 
   const SPOTS = [
     // wf = how much of the open-sea wave penalty applies at the spot
@@ -307,9 +317,17 @@
     c.pres = x.dp24 == null ? 0 : x.dp24 <= -4 ? 3 : x.dp24 >= 5 ? -8 : x.dp24 >= 3 ? -3 : 0;
     c.vis = x.vis == null ? 0 : x.vis < 1000 ? -12 : x.vis < 3000 ? -4 : 0;
     c.temp = x.temp == null ? 0 : x.temp >= 34 ? -4 : x.temp <= 10 ? -6 : 0;
+    // seasonal weights for black sea bream: migration → SST; other months → wind/wave
+    const sw = seasonWeights(monthOf(x.t), bream);
+    c.wind = Math.round(c.wind * sw.wind);
+    c.gust = Math.round(c.gust * sw.wind);
+    c.dir = Math.round(c.dir * sw.wind);
+    c.wave = Math.round(c.wave * sw.wave);
+    c.sst = Math.round(c.sst * sw.sst);
+    c.dsst = Math.round(c.dsst * sw.sst);
     let score = BASE;
     for (const k in c) score += c[k];
-    return { score, c, thunder };
+    return { score, c, thunder, season: sw };
   }
 
   // small tide = gentle current, easiest for black sea bream; big tide runs too fast
@@ -505,6 +523,7 @@
         Object.keys(best.hours[0].ev.c).forEach(k => { comp[k] = mean(best.hours.map(x => x.ev.c[k])); });
         comp.range = RANGE_BONUS[info.range] || 0;
         day.comp = comp;
+        day.season = best.hours[0].ev.season;
         day.status = 'ok';
       } else {
         day.status = first > FISH_LAST ? 'past' : 'dry';
@@ -601,28 +620,40 @@
     const avg = k => mean(nn(w.map(x => x[k])));
     const ws = avg('ws'), wd = mean(nn(w.map(x => x.wd))), wg = Math.max(...nn(w.map(x => x.wg)), 0);
     const wave = Math.max(...nn(w.map(x => x.wave)), -1);
+    const sw = d.season || seasonWeights(monthOf(parseL(d.date)), spot.fish === '黑鯛');
+    const windNote = sw.wind !== 1 ? `×${sw.wind}` : '';
+    const waveNote = sw.wave !== 1 ? `×${sw.wave}` : '';
+    const sstNote = sw.sst !== 1 ? `×${sw.sst}` : '';
+    const seasonTag = spot.fish === '黑鯛'
+      ? (sw.migrate ? '洄游期加重海溫' : '非洄游期風浪為主')
+      : '';
     const rows = [
-      ['基本分', BASE, ''],
+      ['基本分', BASE, seasonTag],
       [`潮流（${fishOf(spot)}愛流動的水）`, d.comp.tide, d.win.tideText],
       ['潮差（小潮好釣、大潮水急）', d.comp.range, RANGE_TXT[d.info.range] || ''],
-      ['風力', d.comp.wind, ws != null ? `${dirName(w[1] ? w[1].wd : wd)} ${beaufort(ws)} 級（${fmt1(ws)} m/s）` : '無資料'],
-      ['陣風', d.comp.gust, wg ? `最大 ${fmt1(wg)} m/s` : ''],
-      ['浪高' + (spot.wf < 1 ? (spot.shore ? '（岸釣影響較小）' : '（港內影響小）') : ''), d.comp.wave, wave >= 0 ? `最大 ${fmt1(wave)} m` : '無預報'],
+      ['風力' + (windNote ? `（${windNote}）` : ''), d.comp.wind, ws != null ? `${dirName(w[1] ? w[1].wd : wd)} ${beaufort(ws)} 級（${fmt1(ws)} m/s）` : '無資料'],
+      ['陣風' + (windNote ? `（${windNote}）` : ''), d.comp.gust, wg ? `最大 ${fmt1(wg)} m/s` : ''],
+      ['浪高' + (waveNote ? `（${waveNote}）` : '') + (spot.wf < 1 ? (spot.shore ? '（岸釣影響較小）' : '（港內影響小）') : ''), d.comp.wave, wave >= 0 ? `最大 ${fmt1(wave)} m` : '無預報'],
       ['降雨', d.comp.rain, `機率最高 ${Math.max(...nn(w.map(x => x.pp)), 0)}%，${fmt1(w.reduce((s, x) => s + (x.pr || 0), 0))} mm`],
-      [spot.fish === '黑鯛' ? '海水溫（黑鯛最愛 19–24°C）' : '海水溫', d.comp.sst, d.sst != null ? fmt1(avg('sst')) + '°C' : ''],
-      ['水溫變化', d.comp.dsst, avg('dsst24') != null ? (avg('dsst24') > 0 ? '+' : '') + fmt1(avg('dsst24')) + '°C / 24h' : ''],
+      [(spot.fish === '黑鯛' ? '海水溫（黑鯛最愛 19–24°C）' : '海水溫') + (sstNote ? `（${sstNote}）` : ''), d.comp.sst, d.sst != null ? fmt1(avg('sst')) + '°C' : ''],
+      ['水溫變化' + (sstNote ? `（${sstNote}）` : ''), d.comp.dsst, avg('dsst24') != null ? (avg('dsst24') > 0 ? '+' : '') + fmt1(avg('dsst24')) + '°C / 24h' : ''],
       ['晨昏時段', d.comp.light, ''],
       ['氣壓變化', d.comp.pres, avg('dp24') != null ? (avg('dp24') > 0 ? '+' : '') + fmt1(avg('dp24')) + ' hPa / 24h' : ''],
       ['能見度', d.comp.vis, avg('vis') != null ? fmt1(avg('vis') / 1000) + ' km' : ''],
       ['氣溫', d.comp.temp, avg('temp') != null ? fmt1(avg('temp')) + '°C' : '']
     ];
-    if (spot.windPref === 'north') rows.splice(5, 0, ['風向（彰濱北風佳、南風差）', d.comp.dir, '']);
+    if (spot.windPref === 'north') rows.splice(5, 0, ['風向（彰濱北風佳、南風差）' + (windNote ? `（${windNote}）` : ''), d.comp.dir, '']);
+    const barMax = Math.max(20, ...rows.filter(([k]) => k !== '基本分').map(([, v]) => Math.abs(Math.round(v || 0))));
     return rows.map(([k, v, note]) => {
       const r = Math.round(v);
-      const cls = k === '基本分' ? '' : r > 0 ? 'pos' : r < 0 ? 'neg' : '';
-      const val = k === '基本分' ? r : (r > 0 ? '+' + r : r === 0 ? '0' : r);
-      return `<li><span>${k}${note ? ` <small style="color:#64748b">${note}</small>` : ''}</span><span class="v ${cls}">${val}</span></li>`;
-    }).join('') + (d.win.notes.length ? `<li><span>上限修正</span><span class="v neg">${d.win.notes.join('、')}</span></li>` : '');
+      const isBase = k === '基本分';
+      const cls = isBase ? '' : r > 0 ? 'pos' : r < 0 ? 'neg' : '';
+      const val = isBase ? r : (r > 0 ? '+' + r : r === 0 ? '0' : r);
+      const pct = isBase || r === 0 ? 0 : Math.min(100, Math.round(Math.abs(r) / barMax * 100));
+      const bar = isBase ? '<span class="rbar rbar-base" aria-hidden="true"></span>'
+        : `<span class="rbar" aria-hidden="true"><span class="rbar-track"><span class="rbar-fill ${cls || 'zero'}" style="--w:${pct}%"></span></span></span>`;
+      return `<li><span class="rk">${k}${note ? ` <small>${note}</small>` : ''}</span>${bar}<span class="v ${cls}">${val}</span></li>`;
+    }).join('') + (d.win.notes.length ? `<li><span class="rk">上限修正</span><span class="rbar rbar-base" aria-hidden="true"></span><span class="v neg">${d.win.notes.join('、')}</span></li>` : '');
   }
 
   // ------------------------------------------------------------------ render: status / mode
@@ -957,15 +988,21 @@
       const [ic, wt] = wxIcon(d.daily.code);
       const tides = d.events.map(e => `<span class="${e.type === 'H' ? 'tH' : 'tL'}">${e.type === 'H' ? '滿' : '乾'} ${hm(e.t)}</span>`).join('　');
       return `<div class="dcard c${d.rating.cls.slice(1)}${d.date === state.sel.date ? ' sel' : ''}" data-date="${d.date}">
-        <div class="dc-top"><div><b class="${isWeekend(d.date) ? 'we' : ''}">${dlabel(d.date)}${d.di === 0 ? ' 今天' : ''}</b>
-          <small>${moonIcon(d.info.lunarDay)} ${d.info.lunar}・<span class="range-${d.info.range}">${RANGE_TXT[d.info.range] || ''}</span></small></div>
-          <div class="dc-score"><span class="num">${d.score ?? '—'}</span><span class="lbl">${d.rating.txt}</span></div></div>
-        <div class="dc-win">${d.win ? `⏰ <b>${d.win.label}</b> ${d.win.tideText}` : d.status === 'past' ? '今日已過' : '⛔ 乾潮不能開船'}</div>
-        <div class="dc-row">${tides}</div>
-        ${sp.boat ? `<div class="dc-row">🚤 ${rangesTxt(d.boatRanges).replace(/<br>/g, '、')}</div>` : ''}
-        <div class="dc-row">${ic} ${wt}　${d.isRain ? `<span class="rain-tag${d.thunder ? ' thunder' : ''}">${d.thunder ? '雷雨' : '有雨'}</span> ` : ''}💧${d.ppMax ?? '—'}%　🌡${fmt1(d.daily.tmin)}–${fmt1(d.daily.tmax)}°</div>
-        <div class="dc-row">${arrow(d.domDir)} ${dirName(d.domDir)} ${beaufort(d.windAvg) ?? '—'}–${d.windMaxB ?? '—'} 級（${knots(d.windAvg) ?? '—'} 節）　🌊 ${d.waveMax == null ? '—' : fmt1(d.waveMax) + 'm'}　海溫 ${fmt1(d.sst)}°</div>
-        ${dayTags(sp, d).length ? `<div class="dc-row">${dayTags(sp, d).join('')}</div>` : ''}
+        <div class="dc-inner">
+          <div class="dc-pin">
+            <b class="${isWeekend(d.date) ? 'we' : ''}">${dlabel(d.date)}${d.di === 0 ? ' 今天' : ''}</b>
+            <div class="dc-score"><span class="num">${d.score ?? '—'}</span><span class="lbl">${d.rating.txt}</span></div>
+            <small>${moonIcon(d.info.lunarDay)} ${d.info.lunar}<br><span class="range-${d.info.range}">${RANGE_TXT[d.info.range] || ''}</span></small>
+          </div>
+          <div class="dc-main">
+            <div class="dc-win">${d.win ? `⏰ <b>${d.win.label}</b> ${d.win.tideText}` : d.status === 'past' ? '今日已過' : '⛔ 乾潮不能開船'}</div>
+            <div class="dc-row">${tides}</div>
+            ${sp.boat ? `<div class="dc-row">🚤 ${rangesTxt(d.boatRanges).replace(/<br>/g, '、')}</div>` : ''}
+            <div class="dc-row">${ic} ${wt}　${d.isRain ? `<span class="rain-tag${d.thunder ? ' thunder' : ''}">${d.thunder ? '雷雨' : '有雨'}</span> ` : ''}💧${d.ppMax ?? '—'}%　🌡${fmt1(d.daily.tmin)}–${fmt1(d.daily.tmax)}°</div>
+            <div class="dc-row">${arrow(d.domDir)} ${dirName(d.domDir)} ${beaufort(d.windAvg) ?? '—'}–${d.windMaxB ?? '—'} 級（${knots(d.windAvg) ?? '—'} 節）　🌊 ${d.waveMax == null ? '—' : fmt1(d.waveMax) + 'm'}　海溫 ${fmt1(d.sst)}°</div>
+            ${dayTags(sp, d).length ? `<div class="dc-row">${dayTags(sp, d).join('')}</div>` : ''}
+          </div>
+        </div>
       </div>`;
     }).join('') + '</div>';
     $('dayTable').querySelectorAll('.dcard').forEach(el => el.addEventListener('click', () => openDetail(sp.key, el.dataset.date)));
@@ -1194,6 +1231,7 @@
         <li>雨：毛毛雨 −3（黑鯛不怕小雨）、1 mm/h −10、4 mm/h −20、10 mm/h −35、雷雨 −40（且總分最多 35）。</li>
         <li><b>海水溫（黑鯛）</b>：19–24°C +8（最活躍）、17–19 / 24–26°C +3 / +4、26–27°C 0、27–28°C −5、28–29°C −10、29°C 以上 −15；17°C 以下 −10、15°C 以下 −20、13°C 以下 −30。</li>
         <li><b>水溫變化（黑鯛）</b>：一天內降 0.8°C −5、降 1.5°C 以上 −10（冷鋒、冷水進來會停口）；20°C 以下回暖 0.8°C +3。</li>
+        <li><b>依月份調整權重（黑鯛）</b>：10–3 月為洄游期，海水溫／水溫變化 ×${SEASON_MIGRATE.sst}、風／浪 ×${SEASON_MIGRATE.wind}；4–9 月風浪為主，風／浪 ×${SEASON_OTHER.wind}、海水溫／水溫變化 ×${SEASON_OTHER.sst}。岸釣不限魚種不套用。</li>
         <li>岸釣海水溫：17–27°C 不扣，偏冷、偏熱小扣；水溫驟降扣一半。</li>
         <li>晨昏 +5、深夜 −5；鋒面前降壓 +3、冷鋒後回升 −8；起霧 −12。</li>
         <li><b>水色預估（測試中，只供參考，不算分；簡易模式看曲線）</b>：看前 48 小時的風（越近越重）與最大浪、大中小潮、上游河川（烏溪、濁水溪、北港溪、八掌溪、曾文溪、鹽水溪）近 3 天雨量，分很清／清／微濁／濁／很濁五級；布袋、安平港內風浪影響約減半。</li>
